@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_COMMIT_AND_PUSH_PROMPT,
   getAppModelOptions,
+  getProviderStartOptionsFromAppSettings,
   getSlashModelOptions,
   normalizeCustomModelSlugs,
   normalizeEnvironmentVariablesText,
@@ -171,6 +172,40 @@ describe("parseEnvironmentVariablesText", () => {
         invalidLineNumbers: [1],
       },
     );
+  });
+
+  it("builds provider start options from app settings", () => {
+    expect(
+      getProviderStartOptionsFromAppSettings({
+        codexBinaryPath: "/usr/local/bin/codex",
+        codexHomePath: "/tmp/.codex",
+        claudeBinaryPath: "/usr/local/bin/claude",
+        claudeEnvVars: "AWS_ACCESS_KEY_ID=test\nAWS_SECRET_ACCESS_KEY=secret",
+      }),
+    ).toEqual({
+      codex: {
+        binaryPath: "/usr/local/bin/codex",
+        homePath: "/tmp/.codex",
+      },
+      claudeCode: {
+        binaryPath: "/usr/local/bin/claude",
+        env: {
+          AWS_ACCESS_KEY_ID: "test",
+          AWS_SECRET_ACCESS_KEY: "secret",
+        },
+      },
+    });
+  });
+
+  it("omits provider start options when settings are empty", () => {
+    expect(
+      getProviderStartOptionsFromAppSettings({
+        codexBinaryPath: "",
+        codexHomePath: "",
+        claudeBinaryPath: "",
+        claudeEnvVars: "",
+      }),
+    ).toBeUndefined();
   });
 });
 

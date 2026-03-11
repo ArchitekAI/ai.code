@@ -209,9 +209,10 @@ import { newCommandId, newMessageId, newThreadId } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import {
   getAppModelOptions,
+  getAppSettingsSnapshot,
   getCustomModelsForProvider,
+  getProviderStartOptionsFromAppSettings,
   isClaudeBedrockEnabled,
-  parseEnvironmentVariablesText,
   resolveAppModelSelection,
   useAppSettings,
 } from "../appSettings";
@@ -996,40 +997,10 @@ export default function ChatView({
     };
     return Object.keys(codexOptions).length > 0 ? { codex: codexOptions } : undefined;
   }, [selectedCodexFastModeEnabled, selectedEffort, selectedProvider, supportsReasoningEffort]);
-  const providerOptionsForDispatch = useMemo(() => {
-    const claudeEnvironment = parseEnvironmentVariablesText(settings.claudeEnvVars).env;
-    if (
-      !settings.codexBinaryPath &&
-      !settings.codexHomePath &&
-      !settings.claudeBinaryPath &&
-      Object.keys(claudeEnvironment).length === 0
-    ) {
-      return undefined;
-    }
-    return {
-      ...(settings.codexBinaryPath || settings.codexHomePath
-        ? {
-            codex: {
-              ...(settings.codexBinaryPath ? { binaryPath: settings.codexBinaryPath } : {}),
-              ...(settings.codexHomePath ? { homePath: settings.codexHomePath } : {}),
-            },
-          }
-        : {}),
-      ...(settings.claudeBinaryPath || Object.keys(claudeEnvironment).length > 0
-        ? {
-            claudeCode: {
-              ...(settings.claudeBinaryPath ? { binaryPath: settings.claudeBinaryPath } : {}),
-              ...(Object.keys(claudeEnvironment).length > 0 ? { env: claudeEnvironment } : {}),
-            },
-          }
-        : {}),
-    };
-  }, [
-    settings.claudeBinaryPath,
-    settings.claudeEnvVars,
-    settings.codexBinaryPath,
-    settings.codexHomePath,
-  ]);
+  const getProviderOptionsForDispatch = useCallback(
+    () => getProviderStartOptionsFromAppSettings(getAppSettingsSnapshot()),
+    [],
+  );
   const selectedModelForPicker = selectedModel;
   const modelOptionsByProvider = useMemo(
     () => getCustomModelOptionsByProvider(settings),
@@ -2930,6 +2901,7 @@ export default function ChatView({
 
       beginSendPhase("sending-turn");
       const turnAttachments = await turnAttachmentsPromise;
+      const providerOptionsForDispatch = getProviderOptionsForDispatch();
       await api.orchestration.dispatchCommand({
         type: "thread.turn.start",
         commandId: newCommandId(),
@@ -3204,6 +3176,7 @@ export default function ChatView({
         // while the same-thread implementation turn is starting.
         setComposerDraftInteractionMode(threadIdForSend, nextInteractionMode);
 
+        const providerOptionsForDispatch = getProviderOptionsForDispatch();
         await api.orchestration.dispatchCommand({
           type: "thread.turn.start",
           commandId: newCommandId(),
@@ -3257,7 +3230,7 @@ export default function ChatView({
       runtimeMode,
       selectedModel,
       selectedModelOptionsForDispatch,
-      providerOptionsForDispatch,
+      getProviderOptionsForDispatch,
       selectedProvider,
       setComposerDraftInteractionMode,
       setThreadError,
@@ -3320,6 +3293,7 @@ export default function ChatView({
         createdAt,
       })
       .then(() => {
+        const providerOptionsForDispatch = getProviderOptionsForDispatch();
         return api.orchestration.dispatchCommand({
           type: "thread.turn.start",
           commandId: newCommandId(),
@@ -3388,7 +3362,7 @@ export default function ChatView({
     runtimeMode,
     selectedModel,
     selectedModelOptionsForDispatch,
-    providerOptionsForDispatch,
+    getProviderOptionsForDispatch,
     selectedProvider,
     settings.enableAssistantStreaming,
     syncServerReadModel,

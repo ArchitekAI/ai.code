@@ -2,6 +2,7 @@ import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   type ProjectId,
   type ProviderInteractionMode,
+  type ProviderKind,
   type RuntimeMode,
   type ThreadId,
   type UploadChatAttachment,
@@ -9,7 +10,9 @@ import {
 } from "@repo/contracts";
 
 import type { DraftThreadState } from "../composerDraftStore";
+import { getAppSettingsSnapshot, getProviderStartOptionsFromAppSettings } from "../appSettings";
 import { readNativeApi } from "../nativeApi";
+import { inferProviderForModel } from "../providerModels";
 import { truncateTitle } from "../truncateTitle";
 import { newCommandId, newMessageId } from "./utils";
 
@@ -37,6 +40,11 @@ export async function sendWorktreeThreadPrompt(input: {
   const runtimeMode: RuntimeMode = input.draftThread?.runtimeMode ?? "full-access";
   const interactionMode: ProviderInteractionMode =
     input.draftThread?.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE;
+  const providerOptions = getProviderStartOptionsFromAppSettings(getAppSettingsSnapshot());
+  const inferredProvider: ProviderKind = inferProviderForModel({
+    model: input.projectModel,
+    sessionProviderName: null,
+  });
 
   if (!input.isServerThread) {
     await api.orchestration.dispatchCommand({
@@ -62,6 +70,8 @@ export async function sendWorktreeThreadPrompt(input: {
       text: prompt,
       attachments: input.attachments ?? [],
     },
+    ...(!input.isServerThread ? { provider: inferredProvider, model: input.projectModel } : {}),
+    ...(providerOptions ? { providerOptions } : {}),
     assistantDeliveryMode: "streaming",
     runtimeMode,
     interactionMode,

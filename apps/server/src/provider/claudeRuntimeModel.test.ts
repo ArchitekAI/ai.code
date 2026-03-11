@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { isClaudeBedrockEnvironment, resolveClaudeRuntimeModel } from "./claudeRuntimeModel.ts";
+import {
+  isClaudeBedrockEnvironment,
+  resolveClaudeRuntimeModel,
+  shouldEnableClaudeFineGrainedToolStreaming,
+} from "./claudeRuntimeModel.ts";
 
 describe("isClaudeBedrockEnvironment", () => {
   it("detects explicit Claude Bedrock flag", () => {
@@ -50,5 +54,23 @@ describe("resolveClaudeRuntimeModel", () => {
     expect(resolveClaudeRuntimeModel("claude-sonnet-4.6", { AWS_ACCESS_KEY_ID: "test" })).toBe(
       "sonnet",
     );
+  });
+});
+
+describe("shouldEnableClaudeFineGrainedToolStreaming", () => {
+  it("disables fine-grained tool streaming for Bedrock environments", () => {
+    expect(
+      shouldEnableClaudeFineGrainedToolStreaming({
+        AWS_ACCESS_KEY_ID: "test",
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps fine-grained tool streaming enabled for Claude-native environments", () => {
+    expect(
+      shouldEnableClaudeFineGrainedToolStreaming({
+        PATH: "/usr/bin",
+      }),
+    ).toBe(true);
   });
 });

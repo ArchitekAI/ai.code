@@ -1,6 +1,6 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { Schema } from "effect";
-import { type ProviderKind } from "@repo/contracts";
+import { type ProviderKind, type ProviderStartOptions } from "@repo/contracts";
 import { MAX_APP_BASE_NAME_LENGTH, normalizeAppBaseName } from "@repo/shared/branding";
 import { DEFAULT_GIT_BRANCH_PREFIX, normalizeGitBranchPrefix } from "@repo/shared/git";
 import { getDefaultModel, getModelOptions, normalizeModelSlug } from "@repo/shared/model";
@@ -12,6 +12,8 @@ export const MAX_CUSTOM_APP_NAME_LENGTH = MAX_APP_BASE_NAME_LENGTH;
 export const MAX_PROMPT_HOTKEY_MESSAGE_LENGTH = 2_000;
 export const DEFAULT_COMMIT_AND_PUSH_PROMPT = "Commit and push changes";
 export const MAX_CLAUDE_ENV_VARS_LENGTH = 16_384;
+export const MAX_ALL_FILES_HIDDEN_PREFIX_LENGTH = 128;
+const MAX_ALL_FILES_HIDDEN_PREFIX_COUNT = 32;
 const MAX_ENV_VAR_KEY_LENGTH = 128;
 const MAX_ENV_VAR_VALUE_LENGTH = 4_096;
 const MAX_ENV_VAR_COUNT = 64;
@@ -40,6 +42,7 @@ const PersistedAppSettingsSchema = Schema.Struct({
   commitAndPushPrompt: Schema.optional(
     Schema.String.check(Schema.isMaxLength(MAX_PROMPT_HOTKEY_MESSAGE_LENGTH)),
   ),
+  allFilesHiddenPrefixes: Schema.optional(Schema.Array(Schema.String)),
 });
 
 const AppSettingsSchema = Schema.Struct({
@@ -54,6 +57,9 @@ const AppSettingsSchema = Schema.Struct({
   customAppName: Schema.String.check(Schema.isMaxLength(MAX_CUSTOM_APP_NAME_LENGTH)),
   gitBranchPrefix: Schema.String.check(Schema.isMaxLength(256)),
   commitAndPushPrompt: Schema.String.check(Schema.isMaxLength(MAX_PROMPT_HOTKEY_MESSAGE_LENGTH)),
+  allFilesHiddenPrefixes: Schema.Array(
+    Schema.String.check(Schema.isMaxLength(MAX_ALL_FILES_HIDDEN_PREFIX_LENGTH)),
+  ),
 });
 
 export type AppSettings = typeof AppSettingsSchema.Type;
@@ -76,6 +82,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   customAppName: "",
   gitBranchPrefix: DEFAULT_GIT_BRANCH_PREFIX,
   commitAndPushPrompt: DEFAULT_COMMIT_AND_PUSH_PROMPT,
+  allFilesHiddenPrefixes: ["."],
 };
 
 let listeners: Array<() => void> = [];
@@ -117,6 +124,32 @@ export function normalizePromptHotkeyMessage(
 ): string {
   const normalized = value?.trim() ?? "";
   return normalized.length > 0 ? normalized : fallback;
+}
+
+export function normalizeAllFilesHiddenPrefixes(
+  prefixes: Iterable<string | null | undefined>,
+): string[] {
+  const normalizedPrefixes: string[] = [];
+  const seen = new Set<string>();
+
+  for (const candidate of prefixes) {
+    const normalized = candidate?.trim() ?? "";
+    if (
+      normalized.length === 0 ||
+      normalized.length > MAX_ALL_FILES_HIDDEN_PREFIX_LENGTH ||
+      seen.has(normalized)
+    ) {
+      continue;
+    }
+
+    seen.add(normalized);
+    normalizedPrefixes.push(normalized);
+    if (normalizedPrefixes.length >= MAX_ALL_FILES_HIDDEN_PREFIX_COUNT) {
+      break;
+    }
+  }
+
+  return normalizedPrefixes;
 }
 
 export function normalizeEnvironmentVariablesText(value: string | null | undefined): string {
@@ -174,6 +207,43 @@ export function parseEnvironmentVariablesText(value: string | null | undefined):
   return { env, invalidLineNumbers };
 }
 
+export function getProviderStartOptionsFromAppSettings(
+  settings: Pick<
+    AppSettings,
+    "codexBinaryPath" | "codexHomePath" | "claudeBinaryPath" | "claudeEnvVars"
+  >,
+): ProviderStartOptions | undefined {
+  const claudeEnvironment = parseEnvironmentVariablesText(settings.claudeEnvVars).env;
+
+  if (
+    !settings.codexBinaryPath &&
+    !settings.codexHomePath &&
+    !settings.claudeBinaryPath &&
+    Object.keys(claudeEnvironment).length === 0
+  ) {
+    return undefined;
+  }
+
+  return {
+    ...(settings.codexBinaryPath || settings.codexHomePath
+      ? {
+          codex: {
+            ...(settings.codexBinaryPath ? { binaryPath: settings.codexBinaryPath } : {}),
+            ...(settings.codexHomePath ? { homePath: settings.codexHomePath } : {}),
+          },
+        }
+      : {}),
+    ...(settings.claudeBinaryPath || Object.keys(claudeEnvironment).length > 0
+      ? {
+          claudeCode: {
+            ...(settings.claudeBinaryPath ? { binaryPath: settings.claudeBinaryPath } : {}),
+            ...(Object.keys(claudeEnvironment).length > 0 ? { env: claudeEnvironment } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
 export function isClaudeBedrockEnabled(value: string | null | undefined): boolean {
   const parsed = parseEnvironmentVariablesText(value);
   const flag = parsed.env.CLAUDE_CODE_USE_BEDROCK;
@@ -200,6 +270,7 @@ function normalizeAppSettings(settings: Partial<AppSettings>): AppSettings {
       normalizeGitBranchPrefix(settings.gitBranchPrefix ?? DEFAULT_GIT_BRANCH_PREFIX) ??
       DEFAULT_GIT_BRANCH_PREFIX,
     commitAndPushPrompt: normalizePromptHotkeyMessage(settings.commitAndPushPrompt),
+    allFilesHiddenPrefixes: normalizeAllFilesHiddenPrefixes(settings.allFilesHiddenPrefixes ?? ["."]),
   });
 }
 

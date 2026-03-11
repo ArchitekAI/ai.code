@@ -669,6 +669,30 @@ function resolveUserDataPath(): string {
   return Path.join(appDataBase, USER_DATA_DIR_NAME);
 }
 
+function clearDevelopmentRendererCaches(): void {
+  if (!isDevelopment) {
+    return;
+  }
+
+  const userDataPath = app.getPath("userData");
+  const cacheDirectories = [
+    "Cache",
+    "Code Cache",
+    "GPUCache",
+    "DawnGraphiteCache",
+    "DawnWebGPUCache",
+    "blob_storage",
+  ];
+
+  for (const directoryName of cacheDirectories) {
+    try {
+      FS.rmSync(Path.join(userDataPath, directoryName), { recursive: true, force: true });
+    } catch {
+      // Best-effort only. Dev startup should not fail because Chromium cache cleanup missed.
+    }
+  }
+}
+
 function configureAppIdentity(appDisplayName = currentAppDisplayName): void {
   currentAppDisplayName = appDisplayName;
   app.setName(appDisplayName);
@@ -1293,7 +1317,12 @@ function createWindow(): BrowserWindow {
   });
 
   if (isDevelopment) {
-    void window.loadURL(process.env.VITE_DEV_SERVER_URL as string);
+    const devUrl = new URL(process.env.VITE_DEV_SERVER_URL as string);
+    devUrl.searchParams.set("t", String(Date.now()));
+    void window.webContents.session
+      .clearCache()
+      .catch(() => undefined)
+      .then(() => window.loadURL(devUrl.toString()));
     window.webContents.openDevTools({ mode: "detach" });
   } else {
     void window.loadURL(`${DESKTOP_SCHEME}://app/index.html`);
@@ -1312,6 +1341,7 @@ function createWindow(): BrowserWindow {
 // Chromium session data uses a filesystem-friendly directory name.
 // Must be called synchronously at the top level — before `app.whenReady()`.
 app.setPath("userData", resolveUserDataPath());
+clearDevelopmentRendererCaches();
 
 configureAppIdentity();
 

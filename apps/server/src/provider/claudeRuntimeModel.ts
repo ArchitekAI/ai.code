@@ -40,6 +40,12 @@ export function isClaudeBedrockEnvironment(
   return AWS_AUTH_ENV_KEYS.some((key) => nonEmptyTrimmed(env[key]) !== undefined);
 }
 
+export function shouldEnableClaudeFineGrainedToolStreaming(
+  env: Record<string, string | undefined> | undefined,
+): boolean {
+  return !isClaudeBedrockEnvironment(env);
+}
+
 export function resolveClaudeRuntimeModel(
   model: string | null | undefined,
   env: Record<string, string | undefined> | undefined,

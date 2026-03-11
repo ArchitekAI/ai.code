@@ -37,7 +37,10 @@ import {
 import { DateTime, Deferred, Effect, Exit, Layer, Queue, Random, Ref, Scope, Stream } from "effect";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
-import { resolveClaudeRuntimeModel } from "../claudeRuntimeModel.ts";
+import {
+  resolveClaudeRuntimeModel,
+  shouldEnableClaudeFineGrainedToolStreaming,
+} from "../claudeRuntimeModel.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -1587,7 +1590,17 @@ function makeClaudeCodeAdapter(options?: ClaudeCodeAdapterLiveOptions) {
           ...process.env,
           ...providerOptions?.env,
         };
-        const runtimeModel = resolveClaudeRuntimeModel(input.model, mergedEnv);
+        const enableFineGrainedToolStreaming =
+          shouldEnableClaudeFineGrainedToolStreaming(mergedEnv);
+        const sdkEnv = enableFineGrainedToolStreaming
+          ? mergedEnv
+          : {
+              ...mergedEnv,
+              // Bedrock rejects the eager_input_streaming tool field that Claude Code
+              // emits when fine-grained tool streaming is enabled.
+              CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING: "0",
+            };
+        const runtimeModel = resolveClaudeRuntimeModel(input.model, sdkEnv);
 
         const queryOptions: ClaudeQueryOptions = {
           ...(input.cwd ? { cwd: input.cwd } : {}),
@@ -1601,10 +1614,10 @@ function makeClaudeCodeAdapter(options?: ClaudeCodeAdapterLiveOptions) {
             : {}),
           ...(resumeState?.resume ? { resume: resumeState.resume } : {}),
           ...(resumeState?.resumeSessionAt ? { resumeSessionAt: resumeState.resumeSessionAt } : {}),
-          includePartialMessages: true,
+          includePartialMessages: enableFineGrainedToolStreaming,
           canUseTool: handleToolUsePermission(contextRef, input.runtimeMode),
           onElicitation: handleElicitation(contextRef),
-          env: mergedEnv,
+          env: sdkEnv,
           ...(input.cwd ? { additionalDirectories: [input.cwd] } : {}),
         };
 
