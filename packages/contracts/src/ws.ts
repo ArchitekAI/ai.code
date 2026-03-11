@@ -1,5 +1,11 @@
 import { Schema, Struct } from "effect";
-import { NonNegativeInt, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas";
+import {
+  NonNegativeInt,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+  WorktreeId,
+} from "./baseSchemas";
 
 import {
   ClientOrchestrationCommand,
@@ -165,6 +171,7 @@ export const WsWelcomePayload = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   projectName: TrimmedNonEmptyString,
   bootstrapProjectId: Schema.optional(ProjectId),
+  bootstrapWorktreeId: Schema.optional(WorktreeId),
   bootstrapThreadId: Schema.optional(ThreadId),
 });
 export type WsWelcomePayload = typeof WsWelcomePayload.Type;

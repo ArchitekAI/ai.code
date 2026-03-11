@@ -44,6 +44,7 @@ describe("composerDraftStore addImages", () => {
       draftsByThreadId: {},
       draftThreadsByThreadId: {},
       projectDraftThreadIdByProjectId: {},
+      worktreeDraftThreadIdByWorktreeId: {},
     });
     originalRevokeObjectUrl = URL.revokeObjectURL;
     revokeSpy = vi.fn();
@@ -133,6 +134,7 @@ describe("composerDraftStore clearComposerContent", () => {
       draftsByThreadId: {},
       draftThreadsByThreadId: {},
       projectDraftThreadIdByProjectId: {},
+      worktreeDraftThreadIdByWorktreeId: {},
     });
     originalRevokeObjectUrl = URL.revokeObjectURL;
     revokeSpy = vi.fn();
@@ -169,6 +171,7 @@ describe("composerDraftStore project draft thread mapping", () => {
       draftsByThreadId: {},
       draftThreadsByThreadId: {},
       projectDraftThreadIdByProjectId: {},
+      worktreeDraftThreadIdByWorktreeId: {},
     });
   });
 
@@ -345,6 +348,7 @@ describe("composerDraftStore codex fast mode", () => {
       draftsByThreadId: {},
       draftThreadsByThreadId: {},
       projectDraftThreadIdByProjectId: {},
+      worktreeDraftThreadIdByWorktreeId: {},
     });
   });
 
@@ -372,6 +376,7 @@ describe("composerDraftStore setModel", () => {
       draftsByThreadId: {},
       draftThreadsByThreadId: {},
       projectDraftThreadIdByProjectId: {},
+      worktreeDraftThreadIdByWorktreeId: {},
     });
   });
 
@@ -394,6 +399,7 @@ describe("composerDraftStore setProvider", () => {
       draftsByThreadId: {},
       draftThreadsByThreadId: {},
       projectDraftThreadIdByProjectId: {},
+      worktreeDraftThreadIdByWorktreeId: {},
     });
   });
 
@@ -423,6 +429,7 @@ describe("composerDraftStore runtime and interaction settings", () => {
       draftsByThreadId: {},
       draftThreadsByThreadId: {},
       projectDraftThreadIdByProjectId: {},
+      worktreeDraftThreadIdByWorktreeId: {},
     });
   });
 

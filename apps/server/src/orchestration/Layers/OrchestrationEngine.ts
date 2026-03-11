@@ -3,6 +3,7 @@ import type {
   OrchestrationReadModel,
   ProjectId,
   ThreadId,
+  WorktreeId,
 } from "@repo/contracts";
 import { OrchestrationCommand } from "@repo/contracts";
 import { Deferred, Effect, Layer, Option, PubSub, Queue, Schema, Stream } from "effect";
@@ -30,8 +31,8 @@ interface CommandEnvelope {
 }
 
 function commandToAggregateRef(command: OrchestrationCommand): {
-  readonly aggregateKind: "project" | "thread";
-  readonly aggregateId: ProjectId | ThreadId;
+  readonly aggregateKind: "project" | "worktree" | "thread";
+  readonly aggregateId: ProjectId | WorktreeId | ThreadId;
 } {
   switch (command.type) {
     case "project.create":
@@ -40,6 +41,13 @@ function commandToAggregateRef(command: OrchestrationCommand): {
       return {
         aggregateKind: "project",
         aggregateId: command.projectId,
+      };
+    case "worktree.create":
+    case "worktree.meta.update":
+    case "worktree.delete":
+      return {
+        aggregateKind: "worktree",
+        aggregateId: command.worktreeId,
       };
     default:
       return {

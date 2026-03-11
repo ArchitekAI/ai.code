@@ -20,31 +20,60 @@ export function sanitizeBranchFragment(raw: string): string {
   return branchFragment.length > 0 ? branchFragment : "update";
 }
 
+export const DEFAULT_GIT_BRANCH_PREFIX = "feature/";
+
 /**
- * Sanitize a string into a `feature/…` branch name.
- * Preserves an existing `feature/` prefix or slash-separated namespace.
+ * Normalize a user-provided branch prefix into a lowercase slash-safe namespace
+ * that always ends with a trailing slash.
  */
-export function sanitizeFeatureBranchName(raw: string): string {
-  const sanitized = sanitizeBranchFragment(raw);
-  if (sanitized.includes("/")) {
-    return sanitized.startsWith("feature/") ? sanitized : `feature/${sanitized}`;
+export function normalizeGitBranchPrefix(raw: string | null | undefined): string | null {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    return null;
   }
-  return `feature/${sanitized}`;
+
+  if (!/[a-z0-9]/i.test(trimmed)) {
+    return null;
+  }
+
+  const sanitized = sanitizeBranchFragment(trimmed)
+    .replace(/^\/+|\/+$/g, "")
+    .replace(/\/+/g, "/");
+
+  if (sanitized.length === 0) {
+    return null;
+  }
+
+  return `${sanitized}/`;
 }
 
-const AUTO_FEATURE_BRANCH_FALLBACK = "feature/update";
+/**
+ * Apply a normalized branch prefix to a branch fragment.
+ */
+export function buildPrefixedBranchName(prefix: string, raw: string): string {
+  const normalizedPrefix = normalizeGitBranchPrefix(prefix) ?? DEFAULT_GIT_BRANCH_PREFIX;
+  const sanitized = sanitizeBranchFragment(raw).replace(/^\/+/, "");
+  const withoutPrefix = sanitized.startsWith(normalizedPrefix)
+    ? sanitized.slice(normalizedPrefix.length)
+    : sanitized;
+  const normalizedFragment = withoutPrefix.replace(/^\/+/, "");
+
+  return `${normalizedPrefix}${normalizedFragment.length > 0 ? normalizedFragment : "update"}`;
+}
 
 /**
- * Resolve a unique `feature/…` branch name that doesn't collide with
- * any existing branch. Appends a numeric suffix when needed.
+ * Resolve a unique prefixed branch name that doesn't collide with existing
+ * branches. Appends a numeric suffix when needed.
  */
-export function resolveAutoFeatureBranchName(
+export function resolveAutoPrefixedBranchName(
   existingBranchNames: readonly string[],
+  prefix: string,
   preferredBranch?: string,
 ): string {
   const preferred = preferredBranch?.trim();
-  const resolvedBase = sanitizeFeatureBranchName(
-    preferred && preferred.length > 0 ? preferred : AUTO_FEATURE_BRANCH_FALLBACK,
+  const resolvedBase = buildPrefixedBranchName(
+    prefix,
+    preferred && preferred.length > 0 ? preferred : "update",
   );
   const existingNames = new Set(existingBranchNames.map((branch) => branch.toLowerCase()));
 
@@ -58,4 +87,29 @@ export function resolveAutoFeatureBranchName(
   }
 
   return `${resolvedBase}-${suffix}`;
+}
+
+/**
+ * Sanitize a string into a `feature/…` branch name.
+ * Preserves an existing `feature/` prefix or slash-separated namespace.
+ */
+export function sanitizeFeatureBranchName(raw: string): string {
+  return buildPrefixedBranchName(DEFAULT_GIT_BRANCH_PREFIX, raw);
+}
+
+const AUTO_FEATURE_BRANCH_FALLBACK = `${DEFAULT_GIT_BRANCH_PREFIX}update`;
+
+/**
+ * Resolve a unique `feature/…` branch name that doesn't collide with
+ * any existing branch. Appends a numeric suffix when needed.
+ */
+export function resolveAutoFeatureBranchName(
+  existingBranchNames: readonly string[],
+  preferredBranch?: string,
+): string {
+  return resolveAutoPrefixedBranchName(
+    existingBranchNames,
+    DEFAULT_GIT_BRANCH_PREFIX,
+    preferredBranch ?? AUTO_FEATURE_BRANCH_FALLBACK,
+  );
 }

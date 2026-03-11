@@ -15,6 +15,7 @@ import {
   type OrchestrationSession,
   type OrchestrationThread,
   type OrchestrationThreadActivity,
+  type OrchestrationWorktree,
 } from "@repo/contracts";
 import { Effect, Layer, Schema, Struct } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -34,6 +35,7 @@ import { ProjectionThreadMessage } from "../../persistence/Services/ProjectionTh
 import { ProjectionThreadProposedPlan } from "../../persistence/Services/ProjectionThreadProposedPlans.ts";
 import { ProjectionThreadSession } from "../../persistence/Services/ProjectionThreadSessions.ts";
 import { ProjectionThread } from "../../persistence/Services/ProjectionThreads.ts";
+import { ProjectionWorktree } from "../../persistence/Services/ProjectionWorktrees.ts";
 import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
 import {
   ProjectionSnapshotQuery,
@@ -54,6 +56,12 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
 );
 const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
 const ProjectionThreadDbRowSchema = ProjectionThread;
+const ProjectionWorktreeDbRowSchema = ProjectionWorktree.mapFields(
+  Struct.assign({
+    isRoot: Schema.Number,
+    branchRenamePending: Schema.Number,
+  }),
+);
 const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
   Struct.assign({
     payload: Schema.fromJsonString(Schema.Unknown),
@@ -79,6 +87,7 @@ const ProjectionStateDbRowSchema = ProjectionState;
 
 const REQUIRED_SNAPSHOT_PROJECTORS = [
   ORCHESTRATION_PROJECTOR_NAMES.projects,
+  ORCHESTRATION_PROJECTOR_NAMES.worktrees,
   ORCHESTRATION_PROJECTOR_NAMES.threads,
   ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
   ORCHESTRATION_PROJECTOR_NAMES.threadProposedPlans,
@@ -154,19 +163,37 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       sql`
         SELECT
           thread_id AS "threadId",
-          project_id AS "projectId",
+          worktree_id AS "worktreeId",
           title,
           model,
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
-          branch,
-          worktree_path AS "worktreePath",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
         FROM projection_threads
         ORDER BY created_at ASC, thread_id ASC
+      `,
+  });
+
+  const listWorktreeRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionWorktreeDbRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          worktree_id AS "worktreeId",
+          project_id AS "projectId",
+          workspace_path AS "workspacePath",
+          branch,
+          CASE WHEN is_root = 0 THEN 0 ELSE 1 END AS "isRoot",
+          CASE WHEN branch_rename_pending = 0 THEN 0 ELSE 1 END AS "branchRenamePending",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt",
+          deleted_at AS "deletedAt"
+        FROM projection_worktrees
+        ORDER BY project_id ASC, is_root DESC, created_at ASC, worktree_id ASC
       `,
   });
 
@@ -310,6 +337,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         Effect.gen(function* () {
           const [
             projectRows,
+            worktreeRows,
             threadRows,
             messageRows,
             proposedPlanRows,
@@ -324,6 +352,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 toPersistenceSqlOrDecodeError(
                   "ProjectionSnapshotQuery.getSnapshot:listProjects:query",
                   "ProjectionSnapshotQuery.getSnapshot:listProjects:decodeRows",
+                ),
+              ),
+            ),
+            listWorktreeRows(undefined).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getSnapshot:listWorktrees:query",
+                  "ProjectionSnapshotQuery.getSnapshot:listWorktrees:decodeRows",
                 ),
               ),
             ),
@@ -406,6 +442,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             updatedAt = maxIso(updatedAt, row.updatedAt);
           }
           for (const row of threadRows) {
+            updatedAt = maxIso(updatedAt, row.updatedAt);
+          }
+          for (const row of worktreeRows) {
             updatedAt = maxIso(updatedAt, row.updatedAt);
           }
           for (const row of stateRows) {
@@ -524,15 +563,25 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             deletedAt: row.deletedAt,
           }));
 
+          const worktrees: Array<OrchestrationWorktree> = worktreeRows.map((row) => ({
+            id: row.worktreeId,
+            projectId: row.projectId,
+            workspacePath: row.workspacePath,
+            branch: row.branch,
+            isRoot: row.isRoot === 1,
+            branchRenamePending: row.branchRenamePending === 1,
+            createdAt: row.createdAt,
+            updatedAt: row.updatedAt,
+            deletedAt: row.deletedAt,
+          }));
+
           const threads: Array<OrchestrationThread> = threadRows.map((row) => ({
             id: row.threadId,
-            projectId: row.projectId,
+            worktreeId: row.worktreeId,
             title: row.title,
             model: row.model,
             runtimeMode: row.runtimeMode,
             interactionMode: row.interactionMode,
-            branch: row.branch,
-            worktreePath: row.worktreePath,
             latestTurn: latestTurnByThread.get(row.threadId) ?? null,
             createdAt: row.createdAt,
             updatedAt: row.updatedAt,
@@ -547,6 +596,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           const snapshot = {
             snapshotSequence: computeSnapshotSequence(stateRows),
             projects,
+            worktrees,
             threads,
             updatedAt: updatedAt ?? new Date(0).toISOString(),
           };

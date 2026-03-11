@@ -522,6 +522,7 @@ const make = Effect.gen(function* () {
     }
     const workspaceCwd = resolveThreadWorkspaceCwd({
       thread,
+      worktrees: readModel.worktrees,
       projects: readModel.projects,
     });
     if (!workspaceCwd) {

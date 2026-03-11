@@ -38,6 +38,7 @@ export default function BranchToolbar({
   const activeProjectId = serverThread?.projectId ?? draftThread?.projectId ?? null;
   const activeProject = projects.find((project) => project.id === activeProjectId);
   const activeThreadId = serverThread?.id ?? (draftThread ? threadId : undefined);
+  const activeWorktreeId = serverThread?.worktreeId ?? draftThread?.worktreeId ?? null;
   const activeThreadBranch = serverThread?.branch ?? draftThread?.branch ?? null;
   const activeWorktreePath = serverThread?.worktreePath ?? draftThread?.worktreePath ?? null;
   const branchCwd = activeWorktreePath ?? activeProject?.cwd ?? null;
@@ -64,13 +65,13 @@ export default function BranchToolbar({
           })
           .catch(() => undefined);
       }
-      if (api && hasServerThread) {
+      if (api && hasServerThread && activeWorktreeId) {
         void api.orchestration.dispatchCommand({
-          type: "thread.meta.update",
+          type: "worktree.meta.update",
           commandId: newCommandId(),
-          threadId: activeThreadId,
+          worktreeId: activeWorktreeId,
           branch,
-          worktreePath,
+          ...(worktreePath !== null ? { workspacePath: worktreePath } : {}),
         });
       }
       if (hasServerThread) {
@@ -90,6 +91,7 @@ export default function BranchToolbar({
     },
     [
       activeThreadId,
+      activeWorktreeId,
       serverThread?.session,
       activeWorktreePath,
       hasServerThread,

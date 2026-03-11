@@ -1,6 +1,7 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { Option, Schema } from "effect";
 import { type ProviderKind } from "@repo/contracts";
+import { DEFAULT_GIT_BRANCH_PREFIX, normalizeGitBranchPrefix } from "@repo/shared/git";
 import { getDefaultModel, getModelOptions, normalizeModelSlug } from "@repo/shared/model";
 
 const APP_SETTINGS_STORAGE_KEY = "t3code:app-settings:v1";
@@ -23,6 +24,9 @@ const AppSettingsSchema = Schema.Struct({
   ),
   customCodexModels: Schema.Array(Schema.String).pipe(
     Schema.withConstructorDefault(() => Option.some([])),
+  ),
+  gitBranchPrefix: Schema.String.check(Schema.isMaxLength(256)).pipe(
+    Schema.withConstructorDefault(() => Option.some(DEFAULT_GIT_BRANCH_PREFIX)),
   ),
 });
 export type AppSettings = typeof AppSettingsSchema.Type;
@@ -71,6 +75,8 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
   return {
     ...settings,
     customCodexModels: normalizeCustomModelSlugs(settings.customCodexModels, "codex"),
+    gitBranchPrefix:
+      normalizeGitBranchPrefix(settings.gitBranchPrefix) ?? DEFAULT_GIT_BRANCH_PREFIX,
   };
 }
 

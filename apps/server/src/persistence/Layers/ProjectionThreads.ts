@@ -6,7 +6,7 @@ import { toPersistenceSqlError } from "../Errors.ts";
 import {
   DeleteProjectionThreadInput,
   GetProjectionThreadInput,
-  ListProjectionThreadsByProjectInput,
+  ListProjectionThreadsByWorktreeInput,
   ProjectionThread,
   ProjectionThreadRepository,
   type ProjectionThreadRepositoryShape,
@@ -21,13 +21,11 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
       sql`
         INSERT INTO projection_threads (
           thread_id,
-          project_id,
+          worktree_id,
           title,
           model,
           runtime_mode,
           interaction_mode,
-          branch,
-          worktree_path,
           latest_turn_id,
           created_at,
           updated_at,
@@ -35,13 +33,11 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
         )
         VALUES (
           ${row.threadId},
-          ${row.projectId},
+          ${row.worktreeId},
           ${row.title},
           ${row.model},
           ${row.runtimeMode},
           ${row.interactionMode},
-          ${row.branch},
-          ${row.worktreePath},
           ${row.latestTurnId},
           ${row.createdAt},
           ${row.updatedAt},
@@ -49,13 +45,11 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
         )
         ON CONFLICT (thread_id)
         DO UPDATE SET
-          project_id = excluded.project_id,
+          worktree_id = excluded.worktree_id,
           title = excluded.title,
           model = excluded.model,
           runtime_mode = excluded.runtime_mode,
           interaction_mode = excluded.interaction_mode,
-          branch = excluded.branch,
-          worktree_path = excluded.worktree_path,
           latest_turn_id = excluded.latest_turn_id,
           created_at = excluded.created_at,
           updated_at = excluded.updated_at,
@@ -70,13 +64,11 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
       sql`
         SELECT
           thread_id AS "threadId",
-          project_id AS "projectId",
+          worktree_id AS "worktreeId",
           title,
           model,
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
-          branch,
-          worktree_path AS "worktreePath",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -87,25 +79,23 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
   });
 
   const listProjectionThreadRows = SqlSchema.findAll({
-    Request: ListProjectionThreadsByProjectInput,
+    Request: ListProjectionThreadsByWorktreeInput,
     Result: ProjectionThread,
-    execute: ({ projectId }) =>
+    execute: ({ worktreeId }) =>
       sql`
         SELECT
           thread_id AS "threadId",
-          project_id AS "projectId",
+          worktree_id AS "worktreeId",
           title,
           model,
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
-          branch,
-          worktree_path AS "worktreePath",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
         FROM projection_threads
-        WHERE project_id = ${projectId}
+        WHERE worktree_id = ${worktreeId}
         ORDER BY created_at ASC, thread_id ASC
       `,
   });
@@ -129,9 +119,9 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
       Effect.mapError(toPersistenceSqlError("ProjectionThreadRepository.getById:query")),
     );
 
-  const listByProjectId: ProjectionThreadRepositoryShape["listByProjectId"] = (input) =>
+  const listByWorktreeId: ProjectionThreadRepositoryShape["listByWorktreeId"] = (input) =>
     listProjectionThreadRows(input).pipe(
-      Effect.mapError(toPersistenceSqlError("ProjectionThreadRepository.listByProjectId:query")),
+      Effect.mapError(toPersistenceSqlError("ProjectionThreadRepository.listByWorktreeId:query")),
     );
 
   const deleteById: ProjectionThreadRepositoryShape["deleteById"] = (input) =>
@@ -142,7 +132,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
   return {
     upsert,
     getById,
-    listByProjectId,
+    listByWorktreeId,
     deleteById,
   } satisfies ProjectionThreadRepositoryShape;
 });

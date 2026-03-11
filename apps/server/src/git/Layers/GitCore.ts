@@ -201,6 +201,17 @@ function parseDefaultBranchFromRemoteHeadRef(value: string, remoteName: string):
   return branch.length > 0 ? branch : null;
 }
 
+function parsePrimaryWorktreePath(stdout: string): string | null {
+  for (const line of stdout.split(/\r?\n/g)) {
+    if (!line.startsWith("worktree ")) {
+      continue;
+    }
+    const worktreePath = line.slice("worktree ".length).trim();
+    return worktreePath.length > 0 ? worktreePath : null;
+  }
+  return null;
+}
+
 function createGitCommandError(
   operation: string,
   cwd: string,
@@ -260,6 +271,57 @@ const makeGitCore = Effect.gen(function* () {
           );
         }),
       );
+
+  const resolvePrimaryWorktreePath = (cwd: string): Effect.Effect<string, GitCommandError> =>
+    runGitStdout("GitCore.resolvePrimaryWorktreePath", cwd, [
+      "worktree",
+      "list",
+      "--porcelain",
+    ]).pipe(Effect.map((stdout) => parsePrimaryWorktreePath(stdout) ?? cwd));
+
+  const copyProjectEnvFilesIntoWorktree = (input: {
+    readonly cwd: string;
+    readonly worktreePath: string;
+  }): Effect.Effect<void, GitCommandError> =>
+    Effect.gen(function* () {
+      const projectRoot = yield* resolvePrimaryWorktreePath(input.cwd);
+      for (const fileName of [".env", ".env.local"] as const) {
+        const sourcePath = path.join(projectRoot, fileName);
+        const sourceExists = yield* fileSystem
+          .exists(sourcePath)
+          .pipe(Effect.catch(() => Effect.succeed(false)));
+        if (!sourceExists) {
+          continue;
+        }
+        const bytes = yield* fileSystem
+          .readFile(sourcePath)
+          .pipe(
+            Effect.mapError((cause) =>
+              createGitCommandError(
+                "GitCore.createWorktree.copyEnv",
+                input.cwd,
+                ["worktree", "add", input.worktreePath],
+                `Failed to read ${sourcePath}: ${cause instanceof Error ? cause.message : String(cause)}`,
+                cause,
+              ),
+            ),
+          );
+        const targetPath = path.join(input.worktreePath, fileName);
+        yield* fileSystem
+          .writeFile(targetPath, bytes)
+          .pipe(
+            Effect.mapError((cause) =>
+              createGitCommandError(
+                "GitCore.createWorktree.copyEnv",
+                input.cwd,
+                ["worktree", "add", input.worktreePath],
+                `Failed to write ${targetPath}: ${cause instanceof Error ? cause.message : String(cause)}`,
+                cause,
+              ),
+            ),
+          );
+      }
+    });
 
   const runGit = (
     operation: string,
@@ -1172,11 +1234,11 @@ const makeGitCore = Effect.gen(function* () {
   const createWorktree: GitCoreShape["createWorktree"] = (input) =>
     Effect.gen(function* () {
       const targetBranch = input.newBranch ?? input.branch;
-      const sanitizedBranch = targetBranch.replace(/\//g, "-");
+      const managedPathName = input.managedPathName ?? targetBranch.replace(/\//g, "-");
       const repoName = path.basename(input.cwd);
       const homeDir = process.env.HOME ?? process.env.USERPROFILE ?? "/tmp";
       const worktreePath =
-        input.path ?? path.join(homeDir, ".t3", "worktrees", repoName, sanitizedBranch);
+        input.path ?? path.join(homeDir, ".t3", "worktrees", repoName, managedPathName);
       const args = input.newBranch
         ? ["worktree", "add", "-b", input.newBranch, worktreePath, input.branch]
         : ["worktree", "add", worktreePath, input.branch];
@@ -1184,6 +1246,25 @@ const makeGitCore = Effect.gen(function* () {
       yield* executeGit("GitCore.createWorktree", input.cwd, args, {
         fallbackErrorMessage: "git worktree add failed",
       });
+
+      yield* copyProjectEnvFilesIntoWorktree({
+        cwd: input.cwd,
+        worktreePath,
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.gen(function* () {
+            yield* executeGit(
+              "GitCore.createWorktree.cleanup",
+              input.cwd,
+              ["worktree", "remove", "--force", worktreePath],
+              {
+                allowNonZeroExit: true,
+              },
+            ).pipe(Effect.ignore);
+            return yield* error;
+          }),
+        ),
+      );
 
       return {
         worktree: {

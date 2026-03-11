@@ -13,13 +13,14 @@ import {
   resolveModelSlugForProvider,
 } from "@repo/shared/model";
 import { create } from "zustand";
-import { type ChatMessage, type Project, type Thread } from "./types";
+import { type ChatMessage, type Project, type Thread, type Worktree } from "./types";
 import { Debouncer } from "@tanstack/react-pacer";
 
 // ── State ────────────────────────────────────────────────────────────
 
 export interface AppState {
   projects: Project[];
+  worktrees: Worktree[];
   threads: Thread[];
   threadsHydrated: boolean;
 }
@@ -39,6 +40,7 @@ const LEGACY_PERSISTED_STATE_KEYS = [
 
 const initialState: AppState = {
   projects: [],
+  worktrees: [],
   threads: [],
   threadsHydrated: false,
 };
@@ -239,6 +241,39 @@ function toAttachmentPreviewUrl(rawUrl: string): string {
   return rawUrl;
 }
 
+function mapWorktreesFromReadModel(
+  incoming: OrchestrationReadModel["worktrees"],
+  previous: Worktree[],
+): Worktree[] {
+  const previousById = new Map(previous.map((worktree) => [worktree.id, worktree] as const));
+  return incoming
+    .filter((worktree) => worktree.deletedAt === null)
+    .map((worktree) => {
+      const existing = previousById.get(worktree.id);
+      return {
+        id: worktree.id,
+        projectId: worktree.projectId,
+        workspacePath: worktree.workspacePath,
+        branch: worktree.branch,
+        isRoot: worktree.isRoot,
+        branchRenamePending: worktree.branchRenamePending,
+        createdAt: worktree.createdAt,
+        updatedAt: worktree.updatedAt,
+        deletedAt: worktree.deletedAt,
+        ...(existing ? {} : {}),
+      } satisfies Worktree;
+    })
+    .toSorted((left, right) => {
+      if (left.projectId !== right.projectId) {
+        return left.projectId.localeCompare(right.projectId);
+      }
+      if (left.isRoot !== right.isRoot) {
+        return left.isRoot ? -1 : 1;
+      }
+      return left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id);
+    });
+}
+
 function attachmentPreviewRoutePath(attachmentId: string): string {
   return `/attachments/${encodeURIComponent(attachmentId)}`;
 }
@@ -250,84 +285,91 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
     readModel.projects.filter((project) => project.deletedAt === null),
     state.projects,
   );
+  const worktrees = mapWorktreesFromReadModel(readModel.worktrees, state.worktrees);
+  const worktreeById = new Map(worktrees.map((worktree) => [worktree.id, worktree] as const));
   const existingThreadById = new Map(state.threads.map((thread) => [thread.id, thread] as const));
-  const threads = readModel.threads
-    .filter((thread) => thread.deletedAt === null)
-    .map((thread) => {
-      const existing = existingThreadById.get(thread.id);
-      return {
-        id: thread.id,
-        codexThreadId: null,
-        projectId: thread.projectId,
-        title: thread.title,
-        model: resolveModelSlugForProvider(
-          inferProviderForThreadModel({
-            model: thread.model,
-            sessionProviderName: thread.session?.providerName ?? null,
-          }),
-          thread.model,
-        ),
-        runtimeMode: thread.runtimeMode,
-        interactionMode: thread.interactionMode,
-        session: thread.session
-          ? {
-              provider: toLegacyProvider(thread.session.providerName),
-              status: toLegacySessionStatus(thread.session.status),
-              orchestrationStatus: thread.session.status,
-              activeTurnId: thread.session.activeTurnId ?? undefined,
-              createdAt: thread.session.updatedAt,
-              updatedAt: thread.session.updatedAt,
-              ...(thread.session.lastError ? { lastError: thread.session.lastError } : {}),
-            }
-          : null,
-        messages: thread.messages.map((message) => {
-          const attachments = message.attachments?.map((attachment) => ({
-            type: "image" as const,
-            id: attachment.id,
-            name: attachment.name,
-            mimeType: attachment.mimeType,
-            sizeBytes: attachment.sizeBytes,
-            previewUrl: toAttachmentPreviewUrl(attachmentPreviewRoutePath(attachment.id)),
-          }));
-          const normalizedMessage: ChatMessage = {
-            id: message.id,
-            role: message.role,
-            text: message.text,
-            createdAt: message.createdAt,
-            streaming: message.streaming,
-            ...(message.streaming ? {} : { completedAt: message.updatedAt }),
-            ...(attachments && attachments.length > 0 ? { attachments } : {}),
-          };
-          return normalizedMessage;
+  const threads: Thread[] = [];
+  for (const thread of readModel.threads.filter((entry) => entry.deletedAt === null)) {
+    const existing = existingThreadById.get(thread.id);
+    const worktree = worktreeById.get(thread.worktreeId);
+    if (!worktree) {
+      continue;
+    }
+    threads.push({
+      id: thread.id,
+      codexThreadId: null,
+      worktreeId: thread.worktreeId,
+      projectId: worktree.projectId,
+      title: thread.title,
+      model: resolveModelSlugForProvider(
+        inferProviderForThreadModel({
+          model: thread.model,
+          sessionProviderName: thread.session?.providerName ?? null,
         }),
-        proposedPlans: thread.proposedPlans.map((proposedPlan) => ({
-          id: proposedPlan.id,
-          turnId: proposedPlan.turnId,
-          planMarkdown: proposedPlan.planMarkdown,
-          createdAt: proposedPlan.createdAt,
-          updatedAt: proposedPlan.updatedAt,
-        })),
-        error: thread.session?.lastError ?? null,
-        createdAt: thread.createdAt,
-        latestTurn: thread.latestTurn,
-        lastVisitedAt: existing?.lastVisitedAt ?? thread.updatedAt,
-        branch: thread.branch,
-        worktreePath: thread.worktreePath,
-        turnDiffSummaries: thread.checkpoints.map((checkpoint) => ({
-          turnId: checkpoint.turnId,
-          completedAt: checkpoint.completedAt,
-          status: checkpoint.status,
-          assistantMessageId: checkpoint.assistantMessageId ?? undefined,
-          checkpointTurnCount: checkpoint.checkpointTurnCount,
-          checkpointRef: checkpoint.checkpointRef,
-          files: checkpoint.files.map((file) => ({ ...file })),
-        })),
-        activities: thread.activities.map((activity) => ({ ...activity })),
-      };
+        thread.model,
+      ),
+      runtimeMode: thread.runtimeMode,
+      interactionMode: thread.interactionMode,
+      session: thread.session
+        ? {
+            provider: toLegacyProvider(thread.session.providerName),
+            status: toLegacySessionStatus(thread.session.status),
+            orchestrationStatus: thread.session.status,
+            activeTurnId: thread.session.activeTurnId ?? undefined,
+            createdAt: thread.session.updatedAt,
+            updatedAt: thread.session.updatedAt,
+            ...(thread.session.lastError ? { lastError: thread.session.lastError } : {}),
+          }
+        : null,
+      messages: thread.messages.map((message) => {
+        const attachments = message.attachments?.map((attachment) => ({
+          type: "image" as const,
+          id: attachment.id,
+          name: attachment.name,
+          mimeType: attachment.mimeType,
+          sizeBytes: attachment.sizeBytes,
+          previewUrl: toAttachmentPreviewUrl(attachmentPreviewRoutePath(attachment.id)),
+        }));
+        const normalizedMessage: ChatMessage = {
+          id: message.id,
+          role: message.role,
+          text: message.text,
+          createdAt: message.createdAt,
+          streaming: message.streaming,
+          ...(message.streaming ? {} : { completedAt: message.updatedAt }),
+          ...(attachments && attachments.length > 0 ? { attachments } : {}),
+        };
+        return normalizedMessage;
+      }),
+      proposedPlans: thread.proposedPlans.map((proposedPlan) => ({
+        id: proposedPlan.id,
+        turnId: proposedPlan.turnId,
+        planMarkdown: proposedPlan.planMarkdown,
+        createdAt: proposedPlan.createdAt,
+        updatedAt: proposedPlan.updatedAt,
+      })),
+      error: thread.session?.lastError ?? null,
+      createdAt: thread.createdAt,
+      latestTurn: thread.latestTurn,
+      lastVisitedAt: existing?.lastVisitedAt ?? thread.updatedAt,
+      branch: worktree.branch,
+      worktreePath: worktree.isRoot ? null : worktree.workspacePath,
+      turnDiffSummaries: thread.checkpoints.map((checkpoint) => ({
+        turnId: checkpoint.turnId,
+        completedAt: checkpoint.completedAt,
+        status: checkpoint.status,
+        assistantMessageId: checkpoint.assistantMessageId ?? undefined,
+        checkpointTurnCount: checkpoint.checkpointTurnCount,
+        checkpointRef: checkpoint.checkpointRef,
+        files: checkpoint.files.map((file) => ({ ...file })),
+      })),
+      activities: thread.activities.map((activity) => ({ ...activity })),
     });
+  }
   return {
     ...state,
     projects,
+    worktrees,
     threads,
     threadsHydrated: true,
   };
@@ -417,17 +459,61 @@ export function setThreadBranch(
   branch: string | null,
   worktreePath: string | null,
 ): AppState {
-  const threads = updateThread(state.threads, threadId, (t) => {
-    if (t.branch === branch && t.worktreePath === worktreePath) return t;
-    const cwdChanged = t.worktreePath !== worktreePath;
+  const targetThread = state.threads.find((thread) => thread.id === threadId);
+  if (!targetThread?.worktreeId) {
+    return state;
+  }
+  const targetWorktree = state.worktrees.find(
+    (worktree) => worktree.id === targetThread.worktreeId,
+  );
+  if (!targetWorktree) {
+    return state;
+  }
+  const nextWorkspacePath = worktreePath ?? targetWorktree.workspacePath;
+  const nextThreadWorktreePath = targetWorktree.isRoot ? null : nextWorkspacePath;
+
+  let worktreesChanged = false;
+  const worktrees = state.worktrees.map((worktree) => {
+    if (worktree.id !== targetThread.worktreeId) {
+      return worktree;
+    }
+    if (worktree.branch === branch && worktree.workspacePath === nextWorkspacePath) {
+      return worktree;
+    }
+    worktreesChanged = true;
     return {
-      ...t,
+      ...worktree,
       branch,
-      worktreePath,
+      workspacePath: nextWorkspacePath,
+    };
+  });
+
+  let threadsChanged = false;
+  const threads = state.threads.map((thread) => {
+    if (thread.worktreeId !== targetThread.worktreeId) {
+      return thread;
+    }
+    if (thread.branch === branch && thread.worktreePath === nextThreadWorktreePath) {
+      return thread;
+    }
+    threadsChanged = true;
+    const cwdChanged = thread.worktreePath !== nextThreadWorktreePath;
+    return {
+      ...thread,
+      branch,
+      worktreePath: nextThreadWorktreePath,
       ...(cwdChanged ? { session: null } : {}),
     };
   });
-  return threads === state.threads ? state : { ...state, threads };
+
+  if (!worktreesChanged && !threadsChanged) {
+    return state;
+  }
+  return {
+    ...state,
+    ...(worktreesChanged ? { worktrees } : {}),
+    ...(threadsChanged ? { threads } : {}),
+  };
 }
 
 // ── Zustand store ────────────────────────────────────────────────────

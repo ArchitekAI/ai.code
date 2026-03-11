@@ -4,6 +4,7 @@ import {
   OrchestrationMessage,
   OrchestrationSession,
   OrchestrationThread,
+  OrchestrationWorktree,
 } from "@repo/contracts";
 import { Effect, Schema } from "effect";
 
@@ -13,6 +14,9 @@ import {
   ProjectCreatedPayload,
   ProjectDeletedPayload,
   ProjectMetaUpdatedPayload,
+  WorktreeCreatedPayload,
+  WorktreeDeletedPayload,
+  WorktreeMetaUpdatedPayload,
   ThreadActivityAppendedPayload,
   ThreadCreatedPayload,
   ThreadDeletedPayload,
@@ -24,8 +28,10 @@ import {
   ThreadSessionSetPayload,
   ThreadTurnDiffCompletedPayload,
 } from "./Schemas.ts";
+import { deriveWorktreeIdFromLegacyThread } from "./worktrees.ts";
 
-type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
+type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "worktreeId">>;
+type WorktreePatch = Partial<Omit<OrchestrationWorktree, "id" | "projectId" | "isRoot">>;
 const MAX_THREAD_MESSAGES = 2_000;
 const MAX_THREAD_CHECKPOINTS = 500;
 
@@ -41,6 +47,16 @@ function updateThread(
   patch: ThreadPatch,
 ): OrchestrationThread[] {
   return threads.map((thread) => (thread.id === threadId ? { ...thread, ...patch } : thread));
+}
+
+function updateWorktree(
+  worktrees: ReadonlyArray<OrchestrationWorktree>,
+  worktreeId: OrchestrationWorktree["id"],
+  patch: WorktreePatch,
+): OrchestrationWorktree[] {
+  return worktrees.map((worktree) =>
+    worktree.id === worktreeId ? { ...worktree, ...patch } : worktree,
+  );
 }
 
 function decodeForEvent<A>(
@@ -157,6 +173,7 @@ export function createEmptyReadModel(nowIso: string): OrchestrationReadModel {
   return {
     snapshotSequence: 0,
     projects: [],
+    worktrees: [],
     threads: [],
     updatedAt: nowIso,
   };
@@ -238,6 +255,67 @@ export function projectEvent(
         })),
       );
 
+    case "worktree.created":
+      return Effect.gen(function* () {
+        const payload = yield* decodeForEvent(
+          WorktreeCreatedPayload,
+          event.payload,
+          event.type,
+          "payload",
+        );
+        const worktree: OrchestrationWorktree = yield* decodeForEvent(
+          OrchestrationWorktree,
+          {
+            id: payload.worktreeId,
+            projectId: payload.projectId,
+            workspacePath: payload.workspacePath,
+            branch: payload.branch,
+            isRoot: payload.isRoot,
+            branchRenamePending: payload.branchRenamePending,
+            createdAt: payload.createdAt,
+            updatedAt: payload.updatedAt,
+            deletedAt: null,
+          },
+          event.type,
+          "worktree",
+        );
+        const existing = nextBase.worktrees.find((entry) => entry.id === worktree.id);
+        return {
+          ...nextBase,
+          worktrees: existing
+            ? nextBase.worktrees.map((entry) => (entry.id === worktree.id ? worktree : entry))
+            : [...nextBase.worktrees, worktree],
+        };
+      });
+
+    case "worktree.meta-updated":
+      return decodeForEvent(WorktreeMetaUpdatedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          worktrees: updateWorktree(nextBase.worktrees, payload.worktreeId, {
+            ...(payload.workspacePath !== undefined
+              ? { workspacePath: payload.workspacePath }
+              : {}),
+            ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
+            ...(payload.branchRenamePending !== undefined
+              ? { branchRenamePending: payload.branchRenamePending }
+              : {}),
+            updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
+    case "worktree.deleted":
+      return decodeForEvent(WorktreeDeletedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          worktrees: updateWorktree(nextBase.worktrees, payload.worktreeId, {
+            deletedAt: payload.deletedAt,
+            updatedAt: payload.deletedAt,
+          }),
+        })),
+      );
+
     case "thread.created":
       return Effect.gen(function* () {
         const payload = yield* decodeForEvent(
@@ -246,17 +324,56 @@ export function projectEvent(
           event.type,
           "payload",
         );
+        const worktreeId =
+          payload.worktreeId ??
+          (payload.projectId
+            ? deriveWorktreeIdFromLegacyThread({
+                projectId: payload.projectId,
+                worktreePath: payload.worktreePath,
+              })
+            : null);
+        if (!worktreeId) {
+          return nextBase;
+        }
+        const nextWorktrees =
+          payload.worktreeId !== undefined || payload.projectId === undefined
+            ? nextBase.worktrees
+            : (() => {
+                const existingWorktree = nextBase.worktrees.find(
+                  (entry) => entry.id === worktreeId,
+                );
+                if (existingWorktree) {
+                  return nextBase.worktrees;
+                }
+                const project = nextBase.projects.find((entry) => entry.id === payload.projectId);
+                const legacyWorkspacePath = payload.worktreePath ?? project?.workspaceRoot;
+                if (!legacyWorkspacePath) {
+                  return nextBase.worktrees;
+                }
+                return [
+                  ...nextBase.worktrees,
+                  {
+                    id: worktreeId,
+                    projectId: payload.projectId,
+                    workspacePath: legacyWorkspacePath,
+                    branch: payload.branch ?? null,
+                    isRoot: payload.worktreePath === undefined || payload.worktreePath === null,
+                    branchRenamePending: false,
+                    createdAt: payload.createdAt,
+                    updatedAt: payload.updatedAt,
+                    deletedAt: null,
+                  },
+                ];
+              })();
         const thread: OrchestrationThread = yield* decodeForEvent(
           OrchestrationThread,
           {
             id: payload.threadId,
-            projectId: payload.projectId,
+            worktreeId,
             title: payload.title,
             model: payload.model,
             runtimeMode: payload.runtimeMode,
             interactionMode: payload.interactionMode,
-            branch: payload.branch,
-            worktreePath: payload.worktreePath,
             latestTurn: null,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
@@ -272,6 +389,7 @@ export function projectEvent(
         const existing = nextBase.threads.find((entry) => entry.id === thread.id);
         return {
           ...nextBase,
+          worktrees: nextWorktrees,
           threads: existing
             ? nextBase.threads.map((entry) => (entry.id === thread.id ? thread : entry))
             : [...nextBase.threads, thread],
@@ -296,10 +414,28 @@ export function projectEvent(
           threads: updateThread(nextBase.threads, payload.threadId, {
             ...(payload.title !== undefined ? { title: payload.title } : {}),
             ...(payload.model !== undefined ? { model: payload.model } : {}),
-            ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
-            ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),
+            ...(payload.worktreeId !== undefined ? { worktreeId: payload.worktreeId } : {}),
             updatedAt: payload.updatedAt,
           }),
+          worktrees:
+            payload.worktreeId === undefined &&
+            payload.branch === undefined &&
+            payload.worktreePath === undefined
+              ? nextBase.worktrees
+              : nextBase.worktrees.map((worktree) => {
+                  const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+                  if (!thread || worktree.id !== thread.worktreeId) {
+                    return worktree;
+                  }
+                  return {
+                    ...worktree,
+                    ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
+                    ...(payload.worktreePath !== undefined && payload.worktreePath !== null
+                      ? { workspacePath: payload.worktreePath }
+                      : {}),
+                    updatedAt: payload.updatedAt,
+                  };
+                }),
         })),
       );
 

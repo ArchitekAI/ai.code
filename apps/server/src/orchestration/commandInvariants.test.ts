@@ -5,6 +5,7 @@ import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   ProjectId,
   ThreadId,
+  WorktreeId,
   type OrchestrationCommand,
   type OrchestrationReadModel,
 } from "@repo/contracts";
@@ -19,6 +20,8 @@ import {
 } from "./commandInvariants.ts";
 
 const now = new Date().toISOString();
+const WORKTREE_A = WorktreeId.makeUnsafe("worktree-a");
+const WORKTREE_B = WorktreeId.makeUnsafe("worktree-b");
 
 const readModel: OrchestrationReadModel = {
   snapshotSequence: 2,
@@ -45,9 +48,34 @@ const readModel: OrchestrationReadModel = {
       deletedAt: null,
     },
   ],
+  worktrees: [
+    {
+      id: WORKTREE_A,
+      projectId: ProjectId.makeUnsafe("project-a"),
+      workspacePath: "/tmp/project-a",
+      branch: null,
+      isRoot: true,
+      branchRenamePending: false,
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: null,
+    },
+    {
+      id: WORKTREE_B,
+      projectId: ProjectId.makeUnsafe("project-b"),
+      workspacePath: "/tmp/project-b",
+      branch: null,
+      isRoot: true,
+      branchRenamePending: false,
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: null,
+    },
+  ],
   threads: [
     {
       id: ThreadId.makeUnsafe("thread-1"),
+      worktreeId: WORKTREE_A,
       projectId: ProjectId.makeUnsafe("project-a"),
       title: "Thread A",
       model: "gpt-5-codex",
@@ -67,6 +95,7 @@ const readModel: OrchestrationReadModel = {
     },
     {
       id: ThreadId.makeUnsafe("thread-2"),
+      worktreeId: WORKTREE_B,
       projectId: ProjectId.makeUnsafe("project-b"),
       title: "Thread B",
       model: "gpt-5-codex",
@@ -142,6 +171,7 @@ describe("commandInvariants", () => {
           type: "thread.create",
           commandId: CommandId.makeUnsafe("cmd-2"),
           threadId: ThreadId.makeUnsafe("thread-3"),
+          worktreeId: WORKTREE_A,
           projectId: ProjectId.makeUnsafe("project-a"),
           title: "new",
           model: "gpt-5-codex",
@@ -163,6 +193,7 @@ describe("commandInvariants", () => {
             type: "thread.create",
             commandId: CommandId.makeUnsafe("cmd-3"),
             threadId: ThreadId.makeUnsafe("thread-1"),
+            worktreeId: WORKTREE_A,
             projectId: ProjectId.makeUnsafe("project-a"),
             title: "dup",
             model: "gpt-5-codex",

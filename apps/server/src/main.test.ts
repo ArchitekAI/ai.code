@@ -242,6 +242,7 @@ it.layer(testLayer)("server CLI command", (it) => {
         Effect.succeed({
           snapshotSequence: 2,
           projects: [{} as OrchestrationReadModel["projects"][number]],
+          worktrees: [{} as OrchestrationReadModel["worktrees"][number]],
           threads: [
             {} as OrchestrationReadModel["threads"][number],
             {} as OrchestrationReadModel["threads"][number],

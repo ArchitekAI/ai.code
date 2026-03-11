@@ -64,6 +64,7 @@ const make = Effect.gen(function* () {
 
       const workspaceCwd = resolveThreadWorkspaceCwd({
         thread,
+        worktrees: snapshot.worktrees,
         projects: snapshot.projects,
       });
       if (!workspaceCwd) {

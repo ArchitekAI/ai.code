@@ -8,6 +8,7 @@ import {
   type ProjectId,
   type ServerConfig,
   type ThreadId,
+  type WorktreeId,
   type WsWelcomePayload,
   WS_CHANNELS,
   WS_METHODS,
@@ -27,6 +28,7 @@ import { estimateTimelineMessageHeight } from "./timelineHeight";
 const THREAD_ID = "thread-browser-test" as ThreadId;
 const UUID_ROUTE_RE = /^\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const PROJECT_ID = "project-1" as ProjectId;
+const WORKTREE_ID = "worktree-1" as WorktreeId;
 const NOW_ISO = "2026-03-04T12:00:00.000Z";
 const BASE_TIME_MS = Date.parse(NOW_ISO);
 const ATTACHMENT_SVG = "<svg xmlns='http://www.w3.org/2000/svg' width='120' height='300'></svg>";
@@ -201,16 +203,27 @@ function createSnapshotForTargetUser(options: {
         deletedAt: null,
       },
     ],
+    worktrees: [
+      {
+        id: WORKTREE_ID,
+        projectId: PROJECT_ID,
+        workspacePath: "/repo/project",
+        branch: "main",
+        isRoot: true,
+        branchRenamePending: false,
+        createdAt: NOW_ISO,
+        updatedAt: NOW_ISO,
+        deletedAt: null,
+      },
+    ],
     threads: [
       {
         id: THREAD_ID,
-        projectId: PROJECT_ID,
+        worktreeId: WORKTREE_ID,
         title: "Browser test thread",
         model: "gpt-5",
         interactionMode: "default",
         runtimeMode: "full-access",
-        branch: "main",
-        worktreePath: null,
         latestTurn: null,
         createdAt: NOW_ISO,
         updatedAt: NOW_ISO,
@@ -242,6 +255,7 @@ function buildFixture(snapshot: OrchestrationReadModel): TestFixture {
       cwd: "/repo/project",
       projectName: "Project",
       bootstrapProjectId: PROJECT_ID,
+      bootstrapWorktreeId: WORKTREE_ID,
       bootstrapThreadId: THREAD_ID,
     },
   };
@@ -258,13 +272,11 @@ function addThreadToSnapshot(
       ...snapshot.threads,
       {
         id: threadId,
-        projectId: PROJECT_ID,
+        worktreeId: WORKTREE_ID,
         title: "New thread",
         model: "gpt-5",
         interactionMode: "default",
         runtimeMode: "full-access",
-        branch: "main",
-        worktreePath: null,
         latestTurn: null,
         createdAt: NOW_ISO,
         updatedAt: NOW_ISO,
@@ -710,6 +722,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       draftsByThreadId: {},
       draftThreadsByThreadId: {},
       projectDraftThreadIdByProjectId: {},
+      worktreeDraftThreadIdByWorktreeId: {},
     });
     useStore.setState({
       projects: [],
@@ -884,6 +897,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       draftThreadsByThreadId: {
         [THREAD_ID]: {
           projectId: PROJECT_ID,
+          worktreeId: WORKTREE_ID,
           createdAt: NOW_ISO,
           runtimeMode: "full-access",
           interactionMode: "default",
@@ -894,6 +908,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
       },
       projectDraftThreadIdByProjectId: {
         [PROJECT_ID]: THREAD_ID,
+      },
+      worktreeDraftThreadIdByWorktreeId: {
+        [WORKTREE_ID]: THREAD_ID,
       },
     });
 

@@ -18,6 +18,7 @@ import {
   type ProviderKind,
   type ThreadId,
   type TurnId,
+  type WorktreeId,
   OrchestrationThreadActivity,
   RuntimeMode,
   ProviderInteractionMode,
@@ -50,6 +51,7 @@ import {
 import { gitBranchesQueryOptions, gitCreateWorktreeMutationOptions } from "~/lib/gitReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
+import { createManagedWorktreeSeed, findRootWorktree, getRootWorktreeId } from "~/lib/worktrees";
 
 import { isElectron } from "../env";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
@@ -204,7 +206,7 @@ import {
 } from "~/projectScripts";
 import { Toggle } from "./ui/toggle";
 import { SidebarTrigger } from "./ui/sidebar";
-import { newCommandId, newMessageId, newThreadId } from "~/lib/utils";
+import { newCommandId, newMessageId, newThreadId, newWorktreeId } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import { getAppModelOptions, resolveAppModelSelection, useAppSettings } from "../appSettings";
 import {
@@ -267,7 +269,6 @@ const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnsw
 const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
 const SCRIPT_TERMINAL_COLS = 120;
 const SCRIPT_TERMINAL_ROWS = 30;
-const WORKTREE_BRANCH_PREFIX = "t3code";
 const COMPOSER_EDITOR_TEST_ID = "composer-editor";
 
 function readLastInvokedScriptByProjectFromStorage(): Record<string, string> {
@@ -334,6 +335,7 @@ function buildLocalDraftThread(
   return {
     id: threadId,
     codexThreadId: null,
+    ...(draftThread.worktreeId ? { worktreeId: draftThread.worktreeId } : {}),
     projectId: draftThread.projectId,
     title: "New thread",
     model: fallbackModel,
@@ -432,12 +434,6 @@ function readFileAsDataUrl(file: File): Promise<string> {
     });
     reader.readAsDataURL(file);
   });
-}
-
-function buildTemporaryWorktreeBranchName(): string {
-  // Keep the 8-hex suffix shape for backend temporary-branch detection.
-  const token = randomUUID().slice(0, 8).toLowerCase();
-  return `${WORKTREE_BRANCH_PREFIX}/${token}`;
 }
 
 function cloneComposerImageForRetry(image: ComposerImageAttachment): ComposerImageAttachment {
@@ -581,10 +577,10 @@ interface ChatViewProps {
 export default function ChatView({ threadId }: ChatViewProps) {
   const threads = useStore((store) => store.threads);
   const projects = useStore((store) => store.projects);
+  const worktrees = useStore((store) => store.worktrees);
   const markThreadVisited = useStore((store) => store.markThreadVisited);
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
   const setStoreThreadError = useStore((store) => store.setError);
-  const setStoreThreadBranch = useStore((store) => store.setThreadBranch);
   const { settings } = useAppSettings();
   const navigate = useNavigate();
   const rawSearch = useSearch({
@@ -618,14 +614,11 @@ export default function ChatView({ threadId }: ChatViewProps) {
   );
   const clearComposerDraftContent = useComposerDraftStore((store) => store.clearComposerContent);
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
-  const getDraftThreadByProjectId = useComposerDraftStore(
-    (store) => store.getDraftThreadByProjectId,
+  const getDraftThreadByWorktreeId = useComposerDraftStore(
+    (store) => store.getDraftThreadByWorktreeId,
   );
   const getDraftThread = useComposerDraftStore((store) => store.getDraftThread);
-  const setProjectDraftThreadId = useComposerDraftStore((store) => store.setProjectDraftThreadId);
-  const clearProjectDraftThreadId = useComposerDraftStore(
-    (store) => store.clearProjectDraftThreadId,
-  );
+  const setWorktreeDraftThreadId = useComposerDraftStore((store) => store.setWorktreeDraftThreadId);
   const draftThread = useComposerDraftStore(
     (store) => store.draftThreadsByThreadId[threadId] ?? null,
   );
@@ -780,6 +773,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const activeLatestTurn = activeThread?.latestTurn ?? null;
   const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread?.session ?? null);
   const activeProject = projects.find((p) => p.id === activeThread?.projectId);
+  const activeRootWorktree = activeProject
+    ? findRootWorktree(activeProject.id, worktrees)
+    : undefined;
+  const activeRootWorktreeId = activeRootWorktree?.id ?? null;
 
   const openPullRequestDialog = useCallback(
     (reference?: string) => {
@@ -799,15 +796,18 @@ export default function ChatView({ threadId }: ChatViewProps) {
     setPullRequestDialogState(null);
   }, []);
 
-  const openOrReuseProjectDraftThread = useCallback(
-    async (input: { branch: string; worktreePath: string | null; envMode: DraftThreadEnvMode }) => {
-      if (!activeProject) {
-        throw new Error("No active project is available for this pull request.");
-      }
-      const storedDraftThread = getDraftThreadByProjectId(activeProject.id);
+  const openOrReuseWorktreeDraftThread = useCallback(
+    async (input: {
+      projectId: ProjectId;
+      worktreeId: WorktreeId;
+      branch: string | null;
+      worktreePath: string | null;
+      envMode: DraftThreadEnvMode;
+    }) => {
+      const storedDraftThread = getDraftThreadByWorktreeId(input.worktreeId);
       if (storedDraftThread) {
         setDraftThreadContext(storedDraftThread.threadId, input);
-        setProjectDraftThreadId(activeProject.id, storedDraftThread.threadId, input);
+        setWorktreeDraftThreadId(input.worktreeId, storedDraftThread.threadId, input);
         if (storedDraftThread.threadId !== threadId) {
           await navigate({
             to: "/$threadId",
@@ -818,19 +818,20 @@ export default function ChatView({ threadId }: ChatViewProps) {
       }
 
       const activeDraftThread = getDraftThread(threadId);
-      if (!isServerThread && activeDraftThread?.projectId === activeProject.id) {
+      if (!isServerThread && activeDraftThread?.worktreeId === input.worktreeId) {
         setDraftThreadContext(threadId, input);
-        setProjectDraftThreadId(activeProject.id, threadId, input);
         return;
       }
 
-      clearProjectDraftThreadId(activeProject.id);
       const nextThreadId = newThreadId();
-      setProjectDraftThreadId(activeProject.id, nextThreadId, {
+      setWorktreeDraftThreadId(input.worktreeId, nextThreadId, {
+        projectId: input.projectId,
         createdAt: new Date().toISOString(),
         runtimeMode: DEFAULT_RUNTIME_MODE,
         interactionMode: DEFAULT_INTERACTION_MODE,
-        ...input,
+        branch: input.branch,
+        worktreePath: input.worktreePath,
+        envMode: input.envMode,
       });
       await navigate({
         to: "/$threadId",
@@ -838,27 +839,80 @@ export default function ChatView({ threadId }: ChatViewProps) {
       });
     },
     [
-      activeProject,
-      clearProjectDraftThreadId,
       getDraftThread,
-      getDraftThreadByProjectId,
+      getDraftThreadByWorktreeId,
       isServerThread,
       navigate,
       setDraftThreadContext,
-      setProjectDraftThreadId,
+      setWorktreeDraftThreadId,
       threadId,
     ],
   );
 
   const handlePreparedPullRequestThread = useCallback(
     async (input: { branch: string; worktreePath: string | null }) => {
-      await openOrReuseProjectDraftThread({
+      if (!activeProject) {
+        throw new Error("No active project is available for this pull request.");
+      }
+      const api = readNativeApi();
+      if (!api) {
+        throw new Error("Native API unavailable.");
+      }
+
+      if (input.worktreePath === null) {
+        const rootWorktreeId = activeRootWorktree?.id ?? getRootWorktreeId(activeProject.id);
+        await api.orchestration.dispatchCommand({
+          type: "worktree.meta.update",
+          commandId: newCommandId(),
+          worktreeId: rootWorktreeId,
+          branch: input.branch,
+        });
+        await openOrReuseWorktreeDraftThread({
+          projectId: activeProject.id,
+          worktreeId: rootWorktreeId,
+          branch: input.branch,
+          worktreePath: null,
+          envMode: "local",
+        });
+        return;
+      }
+
+      const existingWorktree = worktrees.find(
+        (worktree) =>
+          worktree.workspacePath === input.worktreePath && worktree.projectId === activeProject.id,
+      );
+      const worktreeId = existingWorktree?.id ?? newWorktreeId();
+      if (existingWorktree) {
+        await api.orchestration.dispatchCommand({
+          type: "worktree.meta.update",
+          commandId: newCommandId(),
+          worktreeId,
+          branch: input.branch,
+          workspacePath: input.worktreePath,
+          branchRenamePending: false,
+        });
+      } else {
+        await api.orchestration.dispatchCommand({
+          type: "worktree.create",
+          commandId: newCommandId(),
+          worktreeId,
+          projectId: activeProject.id,
+          workspacePath: input.worktreePath,
+          branch: input.branch,
+          isRoot: false,
+          branchRenamePending: false,
+          createdAt: new Date().toISOString(),
+        });
+      }
+      await openOrReuseWorktreeDraftThread({
+        projectId: activeProject.id,
+        worktreeId,
         branch: input.branch,
         worktreePath: input.worktreePath,
-        envMode: input.worktreePath ? "worktree" : "local",
+        envMode: "worktree",
       });
     },
-    [openOrReuseProjectDraftThread],
+    [activeProject, activeRootWorktree, openOrReuseWorktreeDraftThread, worktrees],
   );
 
   useEffect(() => {
@@ -2753,31 +2807,46 @@ export default function ChatView({ threadId }: ChatViewProps) {
 
     let createdServerThreadForLocalDraft = false;
     let turnStartSucceeded = false;
-    let nextThreadBranch = activeThread.branch;
+    let nextThreadWorktreeId: WorktreeId | undefined =
+      activeThread.worktreeId ?? activeRootWorktree?.id;
     let nextThreadWorktreePath = activeThread.worktreePath;
     await (async () => {
       // On first message: lock in branch + create worktree if needed.
       if (baseBranchForWorktree) {
         beginSendPhase("preparing-worktree");
-        const newBranch = buildTemporaryWorktreeBranchName();
+        const { slug, branch: newBranch } = createManagedWorktreeSeed({
+          existingWorktrees: worktrees.filter(
+            (worktree) => worktree.projectId === activeProject.id,
+          ),
+          branchPrefix: settings.gitBranchPrefix,
+        });
         const result = await createWorktreeMutation.mutateAsync({
           cwd: activeProject.cwd,
           branch: baseBranchForWorktree,
           newBranch,
+          managedPathName: slug,
         });
-        nextThreadBranch = result.worktree.branch;
+        const createdWorktreeId = newWorktreeId();
+        await api.orchestration.dispatchCommand({
+          type: "worktree.create",
+          commandId: newCommandId(),
+          worktreeId: createdWorktreeId,
+          projectId: activeProject.id,
+          workspacePath: result.worktree.path,
+          branch: result.worktree.branch,
+          isRoot: false,
+          branchRenamePending: true,
+          createdAt: new Date().toISOString(),
+        });
+        nextThreadWorktreeId = createdWorktreeId;
         nextThreadWorktreePath = result.worktree.path;
         if (isServerThread) {
           await api.orchestration.dispatchCommand({
             type: "thread.meta.update",
             commandId: newCommandId(),
             threadId: threadIdForSend,
-            branch: result.worktree.branch,
-            worktreePath: result.worktree.path,
+            worktreeId: createdWorktreeId,
           });
-          // Keep local thread state in sync immediately so terminal drawer opens
-          // with the worktree cwd/env instead of briefly using the project root.
-          setStoreThreadBranch(threadIdForSend, result.worktree.branch, result.worktree.path);
         }
       }
 
@@ -2801,17 +2870,18 @@ export default function ChatView({ threadId }: ChatViewProps) {
         selectedModel || (activeProject.model as ModelSlug) || DEFAULT_MODEL_BY_PROVIDER.codex;
 
       if (isLocalDraftThread) {
+        if (!nextThreadWorktreeId) {
+          throw new Error("No worktree is available for the new thread.");
+        }
         await api.orchestration.dispatchCommand({
           type: "thread.create",
           commandId: newCommandId(),
           threadId: threadIdForSend,
-          projectId: activeProject.id,
+          worktreeId: nextThreadWorktreeId,
           title,
           model: threadCreateModel,
           runtimeMode,
           interactionMode,
-          branch: nextThreadBranch,
-          worktreePath: nextThreadWorktreePath,
           createdAt: activeThread.createdAt,
         });
         createdServerThreadForLocalDraft = true;
@@ -3225,6 +3295,15 @@ export default function ChatView({ threadId }: ChatViewProps) {
       (activeThread.model as ModelSlug) ||
       (activeProject.model as ModelSlug) ||
       DEFAULT_MODEL_BY_PROVIDER.codex;
+    const implementationWorktreeId = activeThread.worktreeId ?? activeRootWorktreeId;
+    if (!implementationWorktreeId) {
+      toastManager.add({
+        type: "error",
+        title: "No worktree available",
+        description: "The new thread could not be attached to a worktree.",
+      });
+      return;
+    }
 
     sendInFlightRef.current = true;
     beginSendPhase("sending-turn");
@@ -3238,13 +3317,11 @@ export default function ChatView({ threadId }: ChatViewProps) {
         type: "thread.create",
         commandId: newCommandId(),
         threadId: nextThreadId,
-        projectId: activeProject.id,
+        worktreeId: implementationWorktreeId,
         title: nextThreadTitle,
         model: nextThreadModel,
         runtimeMode,
         interactionMode: "default",
-        branch: activeThread.branch,
-        worktreePath: activeThread.worktreePath,
         createdAt,
       })
       .then(() => {
@@ -3305,6 +3382,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   }, [
     activeProject,
     activeProposedPlan,
+    activeRootWorktreeId,
     activeThread,
     beginSendPhase,
     isConnecting,

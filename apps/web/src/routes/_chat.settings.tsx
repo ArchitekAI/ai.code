@@ -1,7 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { type ProviderKind } from "@repo/contracts";
+import { DEFAULT_GIT_BRANCH_PREFIX, normalizeGitBranchPrefix } from "@repo/shared/git";
 import { getModelOptions, normalizeModelSlug } from "@repo/shared/model";
 
 import { MAX_CUSTOM_MODEL_LENGTH, useAppSettings } from "../appSettings";
@@ -94,10 +95,20 @@ function SettingsRouteView() {
   const [customModelErrorByProvider, setCustomModelErrorByProvider] = useState<
     Partial<Record<ProviderKind, string | null>>
   >({});
+  const [gitBranchPrefixInput, setGitBranchPrefixInput] = useState(settings.gitBranchPrefix);
+  const [gitBranchPrefixError, setGitBranchPrefixError] = useState<string | null>(null);
 
   const codexBinaryPath = settings.codexBinaryPath;
   const codexHomePath = settings.codexHomePath;
   const keybindingsConfigPath = serverConfigQuery.data?.keybindingsConfigPath ?? null;
+  const normalizedGitBranchPrefixPreview = useMemo(
+    () => normalizeGitBranchPrefix(gitBranchPrefixInput) ?? settings.gitBranchPrefix,
+    [gitBranchPrefixInput, settings.gitBranchPrefix],
+  );
+
+  useEffect(() => {
+    setGitBranchPrefixInput(settings.gitBranchPrefix);
+  }, [settings.gitBranchPrefix]);
 
   const openKeybindingsFile = useCallback(() => {
     if (!keybindingsConfigPath) return;
@@ -180,6 +191,22 @@ function SettingsRouteView() {
     [settings, updateSettings],
   );
 
+  const handleGitBranchPrefixChange = useCallback(
+    (rawValue: string) => {
+      setGitBranchPrefixInput(rawValue);
+      const normalized = normalizeGitBranchPrefix(rawValue);
+      if (!normalized) {
+        setGitBranchPrefixError("Branch prefixes must contain at least one letter or number.");
+        return;
+      }
+      setGitBranchPrefixError(null);
+      if (normalized !== settings.gitBranchPrefix) {
+        updateSettings({ gitBranchPrefix: normalized });
+      }
+    },
+    [settings.gitBranchPrefix, updateSettings],
+  );
+
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground isolate">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground">
@@ -241,6 +268,75 @@ function SettingsRouteView() {
               <p className="mt-4 text-xs text-muted-foreground">
                 Active theme: <span className="font-medium text-foreground">{resolvedTheme}</span>
               </p>
+            </section>
+
+            <section className="rounded-2xl border border-border bg-card p-5">
+              <div className="mb-4">
+                <h2 className="text-sm font-medium text-foreground">Git</h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Configure the branch namespace used for new worktrees and first-turn branch
+                  rename.
+                </p>
+              </div>
+
+              <div className="space-y-3">
+                <label htmlFor="git-branch-prefix" className="block space-y-1">
+                  <span className="text-xs font-medium text-foreground">Branch name prefix</span>
+                  <Input
+                    id="git-branch-prefix"
+                    value={gitBranchPrefixInput}
+                    onChange={(event) => handleGitBranchPrefixChange(event.target.value)}
+                    placeholder={DEFAULT_GIT_BRANCH_PREFIX}
+                    spellCheck={false}
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    className={
+                      gitBranchPrefixError
+                        ? "border-red-500/70 focus-visible:ring-red-500/40"
+                        : undefined
+                    }
+                  />
+                </label>
+
+                <div className="rounded-xl border border-border/70 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                  <p>
+                    Initial worktree branch:{" "}
+                    <span className="font-mono text-foreground">
+                      {normalizedGitBranchPrefixPreview}silent-fern-ridge
+                    </span>
+                  </p>
+                  <p className="mt-1">
+                    First-turn rename:{" "}
+                    <span className="font-mono text-foreground">
+                      {normalizedGitBranchPrefixPreview}fix-login-timeout
+                    </span>
+                  </p>
+                </div>
+
+                {gitBranchPrefixError ? (
+                  <p className="text-xs text-red-500">{gitBranchPrefixError}</p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Prefixes are normalized to lowercase and always saved with a trailing slash.
+                  </p>
+                )}
+
+                <div className="flex justify-end">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setGitBranchPrefixError(null);
+                      setGitBranchPrefixInput(defaults.gitBranchPrefix);
+                      updateSettings({ gitBranchPrefix: defaults.gitBranchPrefix });
+                    }}
+                    disabled={settings.gitBranchPrefix === defaults.gitBranchPrefix}
+                  >
+                    Reset to default
+                  </Button>
+                </div>
+              </div>
             </section>
 
             <section className="rounded-2xl border border-border bg-card p-5">

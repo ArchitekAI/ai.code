@@ -4,6 +4,7 @@ import {
   ProjectId,
   ThreadId,
   TurnId,
+  WorktreeId,
   type OrchestrationReadModel,
 } from "@repo/contracts";
 import { Effect, Layer } from "effect";
@@ -23,6 +24,7 @@ function makeSnapshot(input: {
   readonly checkpointTurnCount: number;
   readonly checkpointRef: CheckpointRef;
 }): OrchestrationReadModel {
+  const worktreeId = WorktreeId.makeUnsafe(`worktree:${input.projectId}:root`);
   return {
     snapshotSequence: 0,
     updatedAt: "2026-01-01T00:00:00.000Z",
@@ -38,16 +40,27 @@ function makeSnapshot(input: {
         deletedAt: null,
       },
     ],
+    worktrees: [
+      {
+        id: worktreeId,
+        projectId: input.projectId,
+        workspacePath: input.worktreePath ?? input.workspaceRoot,
+        branch: null,
+        isRoot: input.worktreePath === null,
+        branchRenamePending: false,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        deletedAt: null,
+      },
+    ],
     threads: [
       {
         id: input.threadId,
-        projectId: input.projectId,
+        worktreeId,
         title: "Thread",
         model: "gpt-5-codex",
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "full-access",
-        branch: null,
-        worktreePath: input.worktreePath,
         latestTurn: {
           turnId: TurnId.makeUnsafe("turn-1"),
           state: "completed",
@@ -174,6 +187,7 @@ describe("CheckpointDiffQueryLive", () => {
             Effect.succeed({
               snapshotSequence: 0,
               projects: [],
+              worktrees: [],
               threads: [],
               updatedAt: "2026-01-01T00:00:00.000Z",
             } satisfies OrchestrationReadModel),

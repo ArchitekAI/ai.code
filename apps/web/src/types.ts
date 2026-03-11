@@ -12,6 +12,7 @@ import type {
   ProviderKind,
   ProviderInteractionMode,
   RuntimeMode,
+  WorktreeId,
 } from "@repo/contracts";
 
 export type SessionPhase = "disconnected" | "connecting" | "ready" | "running";
@@ -83,9 +84,22 @@ export interface Project {
   scripts: ProjectScript[];
 }
 
+export interface Worktree {
+  id: WorktreeId;
+  projectId: ProjectId;
+  workspacePath: string;
+  branch: string | null;
+  isRoot: boolean;
+  branchRenamePending: boolean;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string | null;
+}
+
 export interface Thread {
   id: ThreadId;
   codexThreadId: string | null;
+  worktreeId?: WorktreeId;
   projectId: ProjectId;
   title: string;
   model: string;

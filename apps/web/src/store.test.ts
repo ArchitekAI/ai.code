@@ -4,16 +4,20 @@ import {
   ThreadId,
   TurnId,
   type OrchestrationReadModel,
+  WorktreeId,
 } from "@repo/contracts";
 import { describe, expect, it } from "vitest";
 
 import { markThreadUnread, reorderProjects, syncServerReadModel, type AppState } from "./store";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
 
+const WORKTREE_ID = WorktreeId.makeUnsafe("worktree-1");
+
 function makeThread(overrides: Partial<Thread> = {}): Thread {
   return {
     id: ThreadId.makeUnsafe("thread-1"),
     codexThreadId: null,
+    worktreeId: WORKTREE_ID,
     projectId: ProjectId.makeUnsafe("project-1"),
     title: "Thread",
     model: "gpt-5-codex",
@@ -45,6 +49,19 @@ function makeState(thread: Thread): AppState {
         scripts: [],
       },
     ],
+    worktrees: [
+      {
+        id: WORKTREE_ID,
+        projectId: ProjectId.makeUnsafe("project-1"),
+        workspacePath: "/tmp/project",
+        branch: null,
+        isRoot: true,
+        branchRenamePending: false,
+        createdAt: "2026-02-13T00:00:00.000Z",
+        updatedAt: "2026-02-13T00:00:00.000Z",
+        deletedAt: null,
+      },
+    ],
     threads: [thread],
     threadsHydrated: true,
   };
@@ -53,13 +70,11 @@ function makeState(thread: Thread): AppState {
 function makeReadModelThread(overrides: Partial<OrchestrationReadModel["threads"][number]>) {
   return {
     id: ThreadId.makeUnsafe("thread-1"),
-    projectId: ProjectId.makeUnsafe("project-1"),
+    worktreeId: WORKTREE_ID,
     title: "Thread",
     model: "gpt-5.3-codex",
     runtimeMode: DEFAULT_RUNTIME_MODE,
     interactionMode: DEFAULT_INTERACTION_MODE,
-    branch: null,
-    worktreePath: null,
     latestTurn: null,
     createdAt: "2026-02-27T00:00:00.000Z",
     updatedAt: "2026-02-27T00:00:00.000Z",
@@ -87,6 +102,19 @@ function makeReadModel(thread: OrchestrationReadModel["threads"][number]): Orche
         updatedAt: "2026-02-27T00:00:00.000Z",
         deletedAt: null,
         scripts: [],
+      },
+    ],
+    worktrees: [
+      {
+        id: WORKTREE_ID,
+        projectId: ProjectId.makeUnsafe("project-1"),
+        workspacePath: "/tmp/project",
+        branch: null,
+        isRoot: true,
+        branchRenamePending: false,
+        createdAt: "2026-02-27T00:00:00.000Z",
+        updatedAt: "2026-02-27T00:00:00.000Z",
+        deletedAt: null,
       },
     ],
     threads: [thread],
@@ -180,6 +208,7 @@ describe("store pure functions", () => {
           scripts: [],
         },
       ],
+      worktrees: [],
       threads: [],
       threadsHydrated: true,
     };
@@ -227,6 +256,7 @@ describe("store read model sync", () => {
           scripts: [],
         },
       ],
+      worktrees: [],
       threads: [],
       threadsHydrated: true,
     };
@@ -250,6 +280,7 @@ describe("store read model sync", () => {
           workspaceRoot: "/tmp/project-3",
         }),
       ],
+      worktrees: [],
       threads: [],
     };
 

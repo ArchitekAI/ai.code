@@ -7,6 +7,7 @@ import {
   type ProjectId,
   type ServerConfig,
   type ThreadId,
+  type WorktreeId,
   type WsWelcomePayload,
   WS_CHANNELS,
   WS_METHODS,
@@ -23,6 +24,7 @@ import { useStore } from "../store";
 
 const THREAD_ID = "thread-kb-toast-test" as ThreadId;
 const PROJECT_ID = "project-1" as ProjectId;
+const WORKTREE_ID = "worktree-1" as WorktreeId;
 const NOW_ISO = "2026-03-04T12:00:00.000Z";
 
 interface TestFixture {
@@ -71,16 +73,27 @@ function createMinimalSnapshot(): OrchestrationReadModel {
         deletedAt: null,
       },
     ],
+    worktrees: [
+      {
+        id: WORKTREE_ID,
+        projectId: PROJECT_ID,
+        workspacePath: "/repo/project",
+        branch: "main",
+        isRoot: true,
+        branchRenamePending: false,
+        createdAt: NOW_ISO,
+        updatedAt: NOW_ISO,
+        deletedAt: null,
+      },
+    ],
     threads: [
       {
         id: THREAD_ID,
-        projectId: PROJECT_ID,
+        worktreeId: WORKTREE_ID,
         title: "Test thread",
         model: "gpt-5",
         interactionMode: "default",
         runtimeMode: "full-access",
-        branch: "main",
-        worktreePath: null,
         latestTurn: null,
         createdAt: NOW_ISO,
         updatedAt: NOW_ISO,
@@ -122,6 +135,7 @@ function buildFixture(): TestFixture {
       cwd: "/repo/project",
       projectName: "Project",
       bootstrapProjectId: PROJECT_ID,
+      bootstrapWorktreeId: WORKTREE_ID,
       bootstrapThreadId: THREAD_ID,
     },
   };
@@ -300,6 +314,7 @@ describe("Keybindings update toast", () => {
       draftsByThreadId: {},
       draftThreadsByThreadId: {},
       projectDraftThreadIdByProjectId: {},
+      worktreeDraftThreadIdByWorktreeId: {},
     });
     useStore.setState({
       projects: [],

@@ -24,6 +24,7 @@ import {
   ProjectionTurnRepository,
 } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionThreadRepository } from "../../persistence/Services/ProjectionThreads.ts";
+import { ProjectionWorktreeRepository } from "../../persistence/Services/ProjectionWorktrees.ts";
 import { ProjectionPendingApprovalRepositoryLive } from "../../persistence/Layers/ProjectionPendingApprovals.ts";
 import { ProjectionProjectRepositoryLive } from "../../persistence/Layers/ProjectionProjects.ts";
 import { ProjectionStateRepositoryLive } from "../../persistence/Layers/ProjectionState.ts";
@@ -33,6 +34,7 @@ import { ProjectionThreadProposedPlanRepositoryLive } from "../../persistence/La
 import { ProjectionThreadSessionRepositoryLive } from "../../persistence/Layers/ProjectionThreadSessions.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { ProjectionThreadRepositoryLive } from "../../persistence/Layers/ProjectionThreads.ts";
+import { ProjectionWorktreeRepositoryLive } from "../../persistence/Layers/ProjectionWorktrees.ts";
 import { ServerConfig } from "../../config.ts";
 import {
   OrchestrationProjectionPipeline,
@@ -44,9 +46,11 @@ import {
   parseThreadSegmentFromAttachmentId,
   toSafeThreadAttachmentSegment,
 } from "../../attachmentStore.ts";
+import { deriveWorktreeIdFromLegacyThread } from "../worktrees.ts";
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
   projects: "projection.projects",
+  worktrees: "projection.worktrees",
   threads: "projection.threads",
   threadMessages: "projection.thread-messages",
   threadProposedPlans: "projection.thread-proposed-plans",
@@ -338,6 +342,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   const eventStore = yield* OrchestrationEventStore;
   const projectionStateRepository = yield* ProjectionStateRepository;
   const projectionProjectRepository = yield* ProjectionProjectRepository;
+  const projectionWorktreeRepository = yield* ProjectionWorktreeRepository;
   const projectionThreadRepository = yield* ProjectionThreadRepository;
   const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
   const projectionThreadProposedPlanRepository = yield* ProjectionThreadProposedPlanRepository;
@@ -408,25 +413,122 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       }
     });
 
+  const applyWorktreesProjection: ProjectorDefinition["apply"] = (event, _attachmentSideEffects) =>
+    Effect.gen(function* () {
+      switch (event.type) {
+        case "worktree.created":
+          yield* projectionWorktreeRepository.upsert({
+            worktreeId: event.payload.worktreeId,
+            projectId: event.payload.projectId,
+            workspacePath: event.payload.workspacePath,
+            branch: event.payload.branch,
+            isRoot: event.payload.isRoot,
+            branchRenamePending: event.payload.branchRenamePending,
+            createdAt: event.payload.createdAt,
+            updatedAt: event.payload.updatedAt,
+            deletedAt: null,
+          });
+          return;
+
+        case "worktree.meta-updated": {
+          const existingRow = yield* projectionWorktreeRepository.getById({
+            worktreeId: event.payload.worktreeId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionWorktreeRepository.upsert({
+            ...existingRow.value,
+            ...(event.payload.workspacePath !== undefined
+              ? { workspacePath: event.payload.workspacePath }
+              : {}),
+            ...(event.payload.branch !== undefined ? { branch: event.payload.branch } : {}),
+            ...(event.payload.branchRenamePending !== undefined
+              ? { branchRenamePending: event.payload.branchRenamePending }
+              : {}),
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "worktree.deleted": {
+          const existingRow = yield* projectionWorktreeRepository.getById({
+            worktreeId: event.payload.worktreeId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionWorktreeRepository.upsert({
+            ...existingRow.value,
+            deletedAt: event.payload.deletedAt,
+            updatedAt: event.payload.deletedAt,
+          });
+          return;
+        }
+
+        default:
+          return;
+      }
+    });
+
   const applyThreadsProjection: ProjectorDefinition["apply"] = (event, attachmentSideEffects) =>
     Effect.gen(function* () {
       switch (event.type) {
-        case "thread.created":
+        case "thread.created": {
+          const worktreeId =
+            event.payload.worktreeId ??
+            (event.payload.projectId
+              ? deriveWorktreeIdFromLegacyThread({
+                  projectId: event.payload.projectId,
+                  worktreePath: event.payload.worktreePath,
+                })
+              : null);
+          if (!worktreeId) {
+            return;
+          }
+
+          if (event.payload.projectId) {
+            const existingWorktree = yield* projectionWorktreeRepository.getById({
+              worktreeId,
+            });
+            if (Option.isNone(existingWorktree)) {
+              const project = yield* projectionProjectRepository.getById({
+                projectId: event.payload.projectId,
+              });
+              const workspacePath =
+                event.payload.worktreePath ??
+                (Option.isSome(project) ? project.value.workspaceRoot : null);
+              if (workspacePath) {
+                yield* projectionWorktreeRepository.upsert({
+                  worktreeId,
+                  projectId: event.payload.projectId,
+                  workspacePath,
+                  branch: event.payload.branch ?? null,
+                  isRoot:
+                    event.payload.worktreePath === undefined || event.payload.worktreePath === null,
+                  branchRenamePending: false,
+                  createdAt: event.payload.createdAt,
+                  updatedAt: event.payload.updatedAt,
+                  deletedAt: null,
+                });
+              }
+            }
+          }
+
           yield* projectionThreadRepository.upsert({
             threadId: event.payload.threadId,
-            projectId: event.payload.projectId,
+            worktreeId,
             title: event.payload.title,
             model: event.payload.model,
             runtimeMode: event.payload.runtimeMode,
             interactionMode: event.payload.interactionMode,
-            branch: event.payload.branch,
-            worktreePath: event.payload.worktreePath,
             latestTurnId: null,
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
             deletedAt: null,
           });
           return;
+        }
 
         case "thread.meta-updated": {
           const existingRow = yield* projectionThreadRepository.getById({
@@ -439,12 +541,26 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             ...existingRow.value,
             ...(event.payload.title !== undefined ? { title: event.payload.title } : {}),
             ...(event.payload.model !== undefined ? { model: event.payload.model } : {}),
-            ...(event.payload.branch !== undefined ? { branch: event.payload.branch } : {}),
-            ...(event.payload.worktreePath !== undefined
-              ? { worktreePath: event.payload.worktreePath }
+            ...(event.payload.worktreeId !== undefined
+              ? { worktreeId: event.payload.worktreeId }
               : {}),
             updatedAt: event.payload.updatedAt,
           });
+          if (event.payload.branch !== undefined || event.payload.worktreePath !== undefined) {
+            const existingWorktree = yield* projectionWorktreeRepository.getById({
+              worktreeId: existingRow.value.worktreeId,
+            });
+            if (Option.isSome(existingWorktree)) {
+              yield* projectionWorktreeRepository.upsert({
+                ...existingWorktree.value,
+                ...(event.payload.branch !== undefined ? { branch: event.payload.branch } : {}),
+                ...(event.payload.worktreePath !== undefined && event.payload.worktreePath !== null
+                  ? { workspacePath: event.payload.worktreePath }
+                  : {}),
+                updatedAt: event.payload.updatedAt,
+              });
+            }
+          }
           return;
         }
 
@@ -1093,6 +1209,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       apply: applyProjectsProjection,
     },
     {
+      name: ORCHESTRATION_PROJECTOR_NAMES.worktrees,
+      apply: applyWorktreesProjection,
+    },
+    {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
       apply: applyThreadMessagesProjection,
     },
@@ -1217,6 +1337,7 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
 ).pipe(
   Layer.provideMerge(NodeServices.layer),
   Layer.provideMerge(ProjectionProjectRepositoryLive),
+  Layer.provideMerge(ProjectionWorktreeRepositoryLive),
   Layer.provideMerge(ProjectionThreadRepositoryLive),
   Layer.provideMerge(ProjectionThreadMessageRepositoryLive),
   Layer.provideMerge(ProjectionThreadProposedPlanRepositoryLive),

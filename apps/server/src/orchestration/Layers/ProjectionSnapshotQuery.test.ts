@@ -1,4 +1,12 @@
-import { CheckpointRef, EventId, MessageId, ProjectId, ThreadId, TurnId } from "@repo/contracts";
+import {
+  CheckpointRef,
+  EventId,
+  MessageId,
+  ProjectId,
+  ThreadId,
+  TurnId,
+  WorktreeId,
+} from "@repo/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -13,6 +21,7 @@ const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
 const asMessageId = (value: string): MessageId => MessageId.makeUnsafe(value);
 const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
 const asCheckpointRef = (value: string): CheckpointRef => CheckpointRef.makeUnsafe(value);
+const asWorktreeId = (value: string): WorktreeId => WorktreeId.makeUnsafe(value);
 
 const projectionSnapshotLayer = it.layer(
   OrchestrationProjectionSnapshotQueryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
@@ -25,6 +34,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       const sql = yield* SqlClient.SqlClient;
 
       yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_worktrees`;
       yield* sql`DELETE FROM projection_state`;
       yield* sql`DELETE FROM projection_turns`;
 
@@ -52,13 +62,38 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       `;
 
       yield* sql`
+        INSERT INTO projection_worktrees (
+          worktree_id,
+          project_id,
+          workspace_path,
+          branch,
+          is_root,
+          branch_rename_pending,
+          created_at,
+          updated_at,
+          deleted_at
+        )
+        VALUES (
+          'worktree-1',
+          'project-1',
+          '/tmp/project-1',
+          'main',
+          1,
+          0,
+          '2026-02-24T00:00:00.000Z',
+          '2026-02-24T00:00:01.500Z',
+          NULL
+        )
+      `;
+
+      yield* sql`
         INSERT INTO projection_threads (
           thread_id,
-          project_id,
+          worktree_id,
           title,
           model,
-          branch,
-          worktree_path,
+          runtime_mode,
+          interaction_mode,
           latest_turn_id,
           created_at,
           updated_at,
@@ -66,11 +101,11 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         )
         VALUES (
           'thread-1',
-          'project-1',
+          'worktree-1',
           'Thread 1',
           'gpt-5-codex',
-          NULL,
-          NULL,
+          'full-access',
+          'default',
           'turn-1',
           '2026-02-24T00:00:02.000Z',
           '2026-02-24T00:00:03.000Z',
@@ -221,16 +256,27 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           deletedAt: null,
         },
       ]);
+      assert.deepEqual(snapshot.worktrees, [
+        {
+          id: asWorktreeId("worktree-1"),
+          projectId: asProjectId("project-1"),
+          workspacePath: "/tmp/project-1",
+          branch: "main",
+          isRoot: true,
+          branchRenamePending: false,
+          createdAt: "2026-02-24T00:00:00.000Z",
+          updatedAt: "2026-02-24T00:00:01.500Z",
+          deletedAt: null,
+        },
+      ]);
       assert.deepEqual(snapshot.threads, [
         {
           id: ThreadId.makeUnsafe("thread-1"),
-          projectId: asProjectId("project-1"),
+          worktreeId: asWorktreeId("worktree-1"),
           title: "Thread 1",
           model: "gpt-5-codex",
           interactionMode: "default",
           runtimeMode: "full-access",
-          branch: null,
-          worktreePath: null,
           latestTurn: {
             turnId: asTurnId("turn-1"),
             state: "completed",

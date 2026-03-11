@@ -8,11 +8,11 @@
  */
 import {
   IsoDateTime,
-  ProjectId,
   ProviderInteractionMode,
   RuntimeMode,
   ThreadId,
   TurnId,
+  WorktreeId,
 } from "@repo/contracts";
 import { Option, Schema, ServiceMap } from "effect";
 import type { Effect } from "effect";
@@ -21,13 +21,11 @@ import type { ProjectionRepositoryError } from "../Errors.ts";
 
 export const ProjectionThread = Schema.Struct({
   threadId: ThreadId,
-  projectId: ProjectId,
+  worktreeId: WorktreeId,
   title: Schema.String,
   model: Schema.String,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
-  branch: Schema.NullOr(Schema.String),
-  worktreePath: Schema.NullOr(Schema.String),
   latestTurnId: Schema.NullOr(TurnId),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -45,10 +43,10 @@ export const DeleteProjectionThreadInput = Schema.Struct({
 });
 export type DeleteProjectionThreadInput = typeof DeleteProjectionThreadInput.Type;
 
-export const ListProjectionThreadsByProjectInput = Schema.Struct({
-  projectId: ProjectId,
+export const ListProjectionThreadsByWorktreeInput = Schema.Struct({
+  worktreeId: WorktreeId,
 });
-export type ListProjectionThreadsByProjectInput = typeof ListProjectionThreadsByProjectInput.Type;
+export type ListProjectionThreadsByWorktreeInput = typeof ListProjectionThreadsByWorktreeInput.Type;
 
 /**
  * ProjectionThreadRepositoryShape - Service API for projected thread records.
@@ -69,12 +67,12 @@ export interface ProjectionThreadRepositoryShape {
   ) => Effect.Effect<Option.Option<ProjectionThread>, ProjectionRepositoryError>;
 
   /**
-   * List projected threads for a project.
+   * List projected threads for a worktree.
    *
    * Returned in deterministic creation order.
    */
-  readonly listByProjectId: (
-    input: ListProjectionThreadsByProjectInput,
+  readonly listByWorktreeId: (
+    input: ListProjectionThreadsByWorktreeInput,
   ) => Effect.Effect<ReadonlyArray<ProjectionThread>, ProjectionRepositoryError>;
 
   /**

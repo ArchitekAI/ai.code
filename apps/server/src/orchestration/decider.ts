@@ -7,11 +7,16 @@ import { Effect } from "effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import {
+  listThreadsByProjectId,
+  listWorktreesByProjectId,
   requireProject,
   requireProjectAbsent,
   requireThread,
   requireThreadAbsent,
+  requireWorktree,
+  requireWorktreeAbsent,
 } from "./commandInvariants.ts";
+import { deriveWorktreeIdFromLegacyThread, rootWorktreeIdForProject } from "./worktrees.ts";
 
 const nowIso = () => new Date().toISOString();
 const DEFAULT_ASSISTANT_DELIVERY_MODE = "buffered" as const;
@@ -65,24 +70,46 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         projectId: command.projectId,
       });
 
-      return {
-        ...withEventBase({
-          aggregateKind: "project",
-          aggregateId: command.projectId,
-          occurredAt: command.createdAt,
-          commandId: command.commandId,
-        }),
-        type: "project.created",
-        payload: {
-          projectId: command.projectId,
-          title: command.title,
-          workspaceRoot: command.workspaceRoot,
-          defaultModel: command.defaultModel ?? null,
-          scripts: [],
-          createdAt: command.createdAt,
-          updatedAt: command.createdAt,
+      const rootWorktreeId = rootWorktreeIdForProject(command.projectId);
+      return [
+        {
+          ...withEventBase({
+            aggregateKind: "project",
+            aggregateId: command.projectId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          }),
+          type: "project.created",
+          payload: {
+            projectId: command.projectId,
+            title: command.title,
+            workspaceRoot: command.workspaceRoot,
+            defaultModel: command.defaultModel ?? null,
+            scripts: [],
+            createdAt: command.createdAt,
+            updatedAt: command.createdAt,
+          },
         },
-      };
+        {
+          ...withEventBase({
+            aggregateKind: "worktree",
+            aggregateId: rootWorktreeId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          }),
+          type: "worktree.created",
+          payload: {
+            worktreeId: rootWorktreeId,
+            projectId: command.projectId,
+            workspacePath: command.workspaceRoot,
+            branch: null,
+            isRoot: true,
+            branchRenamePending: false,
+            createdAt: command.createdAt,
+            updatedAt: command.createdAt,
+          },
+        },
+      ];
     }
 
     case "project.meta.update": {
@@ -92,23 +119,44 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         projectId: command.projectId,
       });
       const occurredAt = nowIso();
-      return {
-        ...withEventBase({
-          aggregateKind: "project",
-          aggregateId: command.projectId,
-          occurredAt,
-          commandId: command.commandId,
-        }),
-        type: "project.meta-updated",
-        payload: {
-          projectId: command.projectId,
-          ...(command.title !== undefined ? { title: command.title } : {}),
-          ...(command.workspaceRoot !== undefined ? { workspaceRoot: command.workspaceRoot } : {}),
-          ...(command.defaultModel !== undefined ? { defaultModel: command.defaultModel } : {}),
-          ...(command.scripts !== undefined ? { scripts: command.scripts } : {}),
-          updatedAt: occurredAt,
+      const events: Array<Omit<OrchestrationEvent, "sequence">> = [
+        {
+          ...withEventBase({
+            aggregateKind: "project",
+            aggregateId: command.projectId,
+            occurredAt,
+            commandId: command.commandId,
+          }),
+          type: "project.meta-updated",
+          payload: {
+            projectId: command.projectId,
+            ...(command.title !== undefined ? { title: command.title } : {}),
+            ...(command.workspaceRoot !== undefined
+              ? { workspaceRoot: command.workspaceRoot }
+              : {}),
+            ...(command.defaultModel !== undefined ? { defaultModel: command.defaultModel } : {}),
+            ...(command.scripts !== undefined ? { scripts: command.scripts } : {}),
+            updatedAt: occurredAt,
+          },
         },
-      };
+      ];
+      if (command.workspaceRoot !== undefined) {
+        events.push({
+          ...withEventBase({
+            aggregateKind: "worktree",
+            aggregateId: rootWorktreeIdForProject(command.projectId),
+            occurredAt,
+            commandId: command.commandId,
+          }),
+          type: "worktree.meta-updated",
+          payload: {
+            worktreeId: rootWorktreeIdForProject(command.projectId),
+            workspacePath: command.workspaceRoot,
+            updatedAt: occurredAt,
+          },
+        });
+      }
+      return events.length === 1 ? events[0]! : events;
     }
 
     case "project.delete": {
@@ -117,27 +165,170 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         projectId: command.projectId,
       });
+      const remainingThreads = listThreadsByProjectId(readModel, command.projectId).filter(
+        (thread) => thread.deletedAt === null,
+      );
+      if (remainingThreads.length > 0) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Project '${command.projectId}' still has threads and cannot be deleted.`,
+        });
+      }
+      const remainingWorktrees = listWorktreesByProjectId(readModel, command.projectId).filter(
+        (worktree) => worktree.deletedAt === null && !worktree.isRoot,
+      );
+      if (remainingWorktrees.length > 0) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Project '${command.projectId}' still has secondary worktrees and cannot be deleted.`,
+        });
+      }
+      const occurredAt = nowIso();
+      return [
+        {
+          ...withEventBase({
+            aggregateKind: "worktree",
+            aggregateId: rootWorktreeIdForProject(command.projectId),
+            occurredAt,
+            commandId: command.commandId,
+          }),
+          type: "worktree.deleted",
+          payload: {
+            worktreeId: rootWorktreeIdForProject(command.projectId),
+            deletedAt: occurredAt,
+          },
+        },
+        {
+          ...withEventBase({
+            aggregateKind: "project",
+            aggregateId: command.projectId,
+            occurredAt,
+            commandId: command.commandId,
+          }),
+          type: "project.deleted",
+          payload: {
+            projectId: command.projectId,
+            deletedAt: occurredAt,
+          },
+        },
+      ];
+    }
+
+    case "worktree.create": {
+      yield* requireProject({
+        readModel,
+        command,
+        projectId: command.projectId,
+      });
+      yield* requireWorktreeAbsent({
+        readModel,
+        command,
+        worktreeId: command.worktreeId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "worktree",
+          aggregateId: command.worktreeId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "worktree.created",
+        payload: {
+          worktreeId: command.worktreeId,
+          projectId: command.projectId,
+          workspacePath: command.workspacePath,
+          branch: command.branch,
+          isRoot: command.isRoot,
+          branchRenamePending: command.branchRenamePending,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "worktree.meta.update": {
+      yield* requireWorktree({
+        readModel,
+        command,
+        worktreeId: command.worktreeId,
+      });
       const occurredAt = nowIso();
       return {
         ...withEventBase({
-          aggregateKind: "project",
-          aggregateId: command.projectId,
+          aggregateKind: "worktree",
+          aggregateId: command.worktreeId,
           occurredAt,
           commandId: command.commandId,
         }),
-        type: "project.deleted",
+        type: "worktree.meta-updated",
         payload: {
-          projectId: command.projectId,
+          worktreeId: command.worktreeId,
+          ...(command.workspacePath !== undefined ? { workspacePath: command.workspacePath } : {}),
+          ...(command.branch !== undefined ? { branch: command.branch } : {}),
+          ...(command.branchRenamePending !== undefined
+            ? { branchRenamePending: command.branchRenamePending }
+            : {}),
+          updatedAt: occurredAt,
+        },
+      };
+    }
+
+    case "worktree.delete": {
+      const worktree = yield* requireWorktree({
+        readModel,
+        command,
+        worktreeId: command.worktreeId,
+      });
+      if (worktree.isRoot) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Root worktree '${command.worktreeId}' cannot be deleted directly.`,
+        });
+      }
+      const worktreeThreads = readModel.threads.filter(
+        (thread) => thread.worktreeId === command.worktreeId && thread.deletedAt === null,
+      );
+      if (worktreeThreads.length > 0) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Worktree '${command.worktreeId}' still has threads and cannot be deleted.`,
+        });
+      }
+      const occurredAt = nowIso();
+      return {
+        ...withEventBase({
+          aggregateKind: "worktree",
+          aggregateId: command.worktreeId,
+          occurredAt,
+          commandId: command.commandId,
+        }),
+        type: "worktree.deleted",
+        payload: {
+          worktreeId: command.worktreeId,
           deletedAt: occurredAt,
         },
       };
     }
 
     case "thread.create": {
-      yield* requireProject({
+      const worktreeId =
+        command.worktreeId ??
+        (command.projectId
+          ? deriveWorktreeIdFromLegacyThread({
+              projectId: command.projectId,
+              worktreePath: command.worktreePath,
+            })
+          : null);
+      if (!worktreeId) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Thread creation requires a worktree.",
+        });
+      }
+      yield* requireWorktree({
         readModel,
         command,
-        projectId: command.projectId,
+        worktreeId,
       });
       yield* requireThreadAbsent({
         readModel,
@@ -154,13 +345,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.created",
         payload: {
           threadId: command.threadId,
-          projectId: command.projectId,
+          worktreeId,
+          ...(command.projectId !== undefined ? { projectId: command.projectId } : {}),
           title: command.title,
           model: command.model,
           runtimeMode: command.runtimeMode,
           interactionMode: command.interactionMode,
-          branch: command.branch,
-          worktreePath: command.worktreePath,
+          ...(command.branch !== undefined ? { branch: command.branch } : {}),
+          ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
@@ -195,6 +387,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (command.worktreeId !== undefined) {
+        yield* requireWorktree({
+          readModel,
+          command,
+          worktreeId: command.worktreeId,
+        });
+      }
       const occurredAt = nowIso();
       return {
         ...withEventBase({
@@ -206,10 +405,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.meta-updated",
         payload: {
           threadId: command.threadId,
+          ...(command.worktreeId !== undefined ? { worktreeId: command.worktreeId } : {}),
           ...(command.title !== undefined ? { title: command.title } : {}),
           ...(command.model !== undefined ? { model: command.model } : {}),
-          ...(command.branch !== undefined ? { branch: command.branch } : {}),
-          ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),
           updatedAt: occurredAt,
         },
       };

@@ -178,6 +178,7 @@ const make = Effect.gen(function* () {
       }) ??
       resolveThreadWorkspaceCwd({
         thread,
+        worktrees: readModel.worktrees,
         projects: readModel.projects,
       });
     if (!checkpointCwd) {
@@ -333,6 +334,7 @@ const make = Effect.gen(function* () {
 
     const checkpointCwdFromThreadOrProject = resolveThreadWorkspaceCwd({
       thread,
+      worktrees: readModel.worktrees,
       projects: readModel.projects,
     });
     const checkpointCwd =
@@ -403,6 +405,7 @@ const make = Effect.gen(function* () {
 
     const checkpointCwdFromThreadOrProject = resolveThreadWorkspaceCwd({
       thread,
+      worktrees: readModel.worktrees,
       projects: readModel.projects,
     });
     const checkpointCwd =

@@ -1144,6 +1144,69 @@ it.layer(TestLayer)("git integration", (it) => {
         expect(existsSync(wtPath)).toBe(false);
       }),
     );
+
+    it.effect("copies .env and .env.local into a newly created worktree", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, ".env"), "DATABASE_URL=postgres://local\n");
+        yield* writeTextFile(path.join(tmp, ".env.local"), "OPENAI_API_KEY=test-key\n");
+
+        const wtPath = path.join(tmp, "wt-env-copy");
+        const currentBranch = (yield* listGitBranches({ cwd: tmp })).branches.find(
+          (b) => b.current,
+        )!.name;
+
+        yield* createGitWorktree({
+          cwd: tmp,
+          branch: currentBranch,
+          newBranch: "wt-env-copy",
+          path: wtPath,
+        });
+
+        expect(yield* fileSystem.readFileString(path.join(wtPath, ".env"))).toBe(
+          "DATABASE_URL=postgres://local\n",
+        );
+        expect(yield* fileSystem.readFileString(path.join(wtPath, ".env.local"))).toBe(
+          "OPENAI_API_KEY=test-key\n",
+        );
+
+        yield* removeGitWorktree({ cwd: tmp, path: wtPath });
+      }),
+    );
+
+    it.effect("uses managedPathName when path is omitted", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+
+        const currentBranch = (yield* listGitBranches({ cwd: tmp })).branches.find(
+          (b) => b.current,
+        )!.name;
+        const managedPathName = "silent-fern-ridge";
+        const expectedPath = path.join(
+          process.env.HOME ?? process.env.USERPROFILE ?? "/tmp",
+          ".t3",
+          "worktrees",
+          path.basename(tmp),
+          managedPathName,
+        );
+
+        const result = yield* createGitWorktree({
+          cwd: tmp,
+          branch: currentBranch,
+          newBranch: "wt-managed-path",
+          managedPathName,
+          path: null,
+        });
+
+        expect(result.worktree.path).toBe(expectedPath);
+        expect(existsSync(expectedPath)).toBe(true);
+
+        yield* removeGitWorktree({ cwd: tmp, path: expectedPath, force: true });
+      }),
+    );
   });
 
   // ── Full flow: local branch checkout ──

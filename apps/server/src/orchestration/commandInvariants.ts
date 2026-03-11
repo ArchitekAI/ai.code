@@ -5,6 +5,8 @@ import type {
   OrchestrationThread,
   ProjectId,
   ThreadId,
+  WorktreeId,
+  OrchestrationWorktree,
 } from "@repo/contracts";
 import { Effect } from "effect";
 
@@ -31,11 +33,30 @@ export function findProjectById(
   return readModel.projects.find((project) => project.id === projectId);
 }
 
+export function findWorktreeById(
+  readModel: OrchestrationReadModel,
+  worktreeId: WorktreeId,
+): OrchestrationWorktree | undefined {
+  return readModel.worktrees.find((worktree) => worktree.id === worktreeId);
+}
+
 export function listThreadsByProjectId(
   readModel: OrchestrationReadModel,
   projectId: ProjectId,
 ): ReadonlyArray<OrchestrationThread> {
-  return readModel.threads.filter((thread) => thread.projectId === projectId);
+  const worktreeIds = new Set(
+    readModel.worktrees
+      .filter((worktree) => worktree.projectId === projectId)
+      .map((worktree) => worktree.id),
+  );
+  return readModel.threads.filter((thread) => worktreeIds.has(thread.worktreeId));
+}
+
+export function listWorktreesByProjectId(
+  readModel: OrchestrationReadModel,
+  projectId: ProjectId,
+): ReadonlyArray<OrchestrationWorktree> {
+  return readModel.worktrees.filter((worktree) => worktree.projectId === projectId);
 }
 
 export function requireProject(input: {
@@ -100,6 +121,39 @@ export function requireThreadAbsent(input: {
     invariantError(
       input.command.type,
       `Thread '${input.threadId}' already exists and cannot be created twice.`,
+    ),
+  );
+}
+
+export function requireWorktree(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly command: OrchestrationCommand;
+  readonly worktreeId: WorktreeId;
+}): Effect.Effect<OrchestrationWorktree, OrchestrationCommandInvariantError> {
+  const worktree = findWorktreeById(input.readModel, input.worktreeId);
+  if (worktree) {
+    return Effect.succeed(worktree);
+  }
+  return Effect.fail(
+    invariantError(
+      input.command.type,
+      `Worktree '${input.worktreeId}' does not exist for command '${input.command.type}'.`,
+    ),
+  );
+}
+
+export function requireWorktreeAbsent(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly command: OrchestrationCommand;
+  readonly worktreeId: WorktreeId;
+}): Effect.Effect<void, OrchestrationCommandInvariantError> {
+  if (!findWorktreeById(input.readModel, input.worktreeId)) {
+    return Effect.void;
+  }
+  return Effect.fail(
+    invariantError(
+      input.command.type,
+      `Worktree '${input.worktreeId}' already exists and cannot be created twice.`,
     ),
   );
 }

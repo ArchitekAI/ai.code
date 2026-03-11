@@ -20,6 +20,7 @@ import {
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   ProjectId,
   ThreadId,
+  WorktreeId,
   WS_CHANNELS,
   WS_METHODS,
   WebSocketRequest,
@@ -78,6 +79,7 @@ import { expandHomePath } from "./os-jank.ts";
 import { makeServerPushBus } from "./wsServer/pushBus.ts";
 import { makeServerReadiness } from "./wsServer/readiness.ts";
 import { decodeJsonResult, formatSchemaError } from "@repo/shared/schemaJson";
+import { rootWorktreeIdForProject } from "./orchestration/worktrees.ts";
 
 /**
  * ServerShape - Service API for server lifecycle control.
@@ -622,6 +624,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   yield* readiness.markOrchestrationSubscriptionsReady;
 
   let welcomeBootstrapProjectId: ProjectId | undefined;
+  let welcomeBootstrapWorktreeId: WorktreeId | undefined;
   let welcomeBootstrapThreadId: ThreadId | undefined;
 
   if (autoBootstrapProjectFromCwd) {
@@ -631,6 +634,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         (project) => project.workspaceRoot === cwd && project.deletedAt === null,
       );
       let bootstrapProjectId: ProjectId;
+      let bootstrapWorktreeId: WorktreeId;
       let bootstrapProjectDefaultModel: string;
 
       if (!existingProject) {
@@ -647,13 +651,15 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           defaultModel: bootstrapProjectDefaultModel,
           createdAt,
         });
+        bootstrapWorktreeId = rootWorktreeIdForProject(bootstrapProjectId);
       } else {
         bootstrapProjectId = existingProject.id;
+        bootstrapWorktreeId = rootWorktreeIdForProject(bootstrapProjectId);
         bootstrapProjectDefaultModel = existingProject.defaultModel ?? "gpt-5-codex";
       }
 
       const existingThread = snapshot.threads.find(
-        (thread) => thread.projectId === bootstrapProjectId && thread.deletedAt === null,
+        (thread) => thread.worktreeId === bootstrapWorktreeId && thread.deletedAt === null,
       );
       if (!existingThread) {
         const createdAt = new Date().toISOString();
@@ -662,19 +668,19 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           type: "thread.create",
           commandId: CommandId.makeUnsafe(crypto.randomUUID()),
           threadId,
-          projectId: bootstrapProjectId,
+          worktreeId: bootstrapWorktreeId,
           title: "New thread",
           model: bootstrapProjectDefaultModel,
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "full-access",
-          branch: null,
-          worktreePath: null,
           createdAt,
         });
         welcomeBootstrapProjectId = bootstrapProjectId;
+        welcomeBootstrapWorktreeId = bootstrapWorktreeId;
         welcomeBootstrapThreadId = threadId;
       } else {
         welcomeBootstrapProjectId = bootstrapProjectId;
+        welcomeBootstrapWorktreeId = bootstrapWorktreeId;
         welcomeBootstrapThreadId = existingThread.id;
       }
     }).pipe(
@@ -961,6 +967,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       cwd,
       projectName,
       ...(welcomeBootstrapProjectId ? { bootstrapProjectId: welcomeBootstrapProjectId } : {}),
+      ...(welcomeBootstrapWorktreeId ? { bootstrapWorktreeId: welcomeBootstrapWorktreeId } : {}),
       ...(welcomeBootstrapThreadId ? { bootstrapThreadId: welcomeBootstrapThreadId } : {}),
     };
     // Send welcome before adding to broadcast set so publishAll calls

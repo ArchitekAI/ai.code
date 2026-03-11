@@ -14,6 +14,11 @@ import {
 } from "@repo/contracts";
 import { Cache, Cause, Duration, Effect, Layer, Option, Schema, Stream } from "effect";
 import { makeDrainableWorker } from "@repo/shared/DrainableWorker";
+import {
+  buildPrefixedBranchName,
+  DEFAULT_GIT_BRANCH_PREFIX,
+  normalizeGitBranchPrefix,
+} from "@repo/shared/git";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
@@ -71,8 +76,6 @@ const serverCommandId = (tag: string): CommandId =>
 const HANDLED_TURN_START_KEY_MAX = 10_000;
 const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
 const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
-const WORKTREE_BRANCH_PREFIX = "t3code";
-const TEMP_WORKTREE_BRANCH_PATTERN = new RegExp(`^${WORKTREE_BRANCH_PREFIX}\\/[0-9a-f]{8}$`);
 
 function isUnknownPendingApprovalRequestError(cause: Cause.Cause<ProviderServiceError>): boolean {
   const error = Cause.squash(cause);
@@ -90,31 +93,15 @@ function isUnknownPendingApprovalRequestError(cause: Cause.Cause<ProviderService
   );
 }
 
-function isTemporaryWorktreeBranch(branch: string): boolean {
-  return TEMP_WORKTREE_BRANCH_PATTERN.test(branch.trim().toLowerCase());
-}
-
-function buildGeneratedWorktreeBranchName(raw: string): string {
-  const normalized = raw
-    .trim()
-    .toLowerCase()
-    .replace(/^refs\/heads\//, "")
-    .replace(/['"`]/g, "");
-
-  const withoutPrefix = normalized.startsWith(`${WORKTREE_BRANCH_PREFIX}/`)
-    ? normalized.slice(`${WORKTREE_BRANCH_PREFIX}/`.length)
-    : normalized;
-
-  const branchFragment = withoutPrefix
-    .replace(/[^a-z0-9/_-]+/g, "-")
-    .replace(/\/+/g, "/")
-    .replace(/-+/g, "-")
-    .replace(/^[./_-]+|[./_-]+$/g, "")
-    .slice(0, 64)
-    .replace(/[./_-]+$/g, "");
-
-  const safeFragment = branchFragment.length > 0 ? branchFragment : "update";
-  return `${WORKTREE_BRANCH_PREFIX}/${safeFragment}`;
+function extractBranchPrefix(branch: string): string {
+  const trimmed = branch.trim();
+  const lastSeparatorIndex = trimmed.lastIndexOf("/");
+  if (lastSeparatorIndex < 0) {
+    return DEFAULT_GIT_BRANCH_PREFIX;
+  }
+  return (
+    normalizeGitBranchPrefix(trimmed.slice(0, lastSeparatorIndex + 1)) ?? DEFAULT_GIT_BRANCH_PREFIX
+  );
 }
 
 const make = Effect.gen(function* () {
@@ -188,6 +175,15 @@ const make = Effect.gen(function* () {
     return readModel.threads.find((entry) => entry.id === threadId);
   });
 
+  const resolveThreadState = Effect.fnUntraced(function* (threadId: ThreadId) {
+    const readModel = yield* orchestrationEngine.getReadModel();
+    const thread = readModel.threads.find((entry) => entry.id === threadId);
+    const worktree = thread
+      ? (readModel.worktrees.find((entry) => entry.id === thread.worktreeId) ?? null)
+      : null;
+    return { readModel, thread: thread ?? null, worktree };
+  });
+
   const ensureSessionForThread = Effect.fnUntraced(function* (
     threadId: ThreadId,
     createdAt: string,
@@ -198,8 +194,7 @@ const make = Effect.gen(function* () {
       readonly providerOptions?: ProviderStartOptions;
     },
   ) {
-    const readModel = yield* orchestrationEngine.getReadModel();
-    const thread = readModel.threads.find((entry) => entry.id === threadId);
+    const { readModel, thread } = yield* resolveThreadState(threadId);
     if (!thread) {
       return yield* Effect.die(new Error(`Thread '${threadId}' was not found in read model.`));
     }
@@ -211,6 +206,7 @@ const make = Effect.gen(function* () {
     const desiredModel = options?.model ?? thread.model;
     const effectiveCwd = resolveThreadWorkspaceCwd({
       thread,
+      worktrees: readModel.worktrees,
       projects: readModel.projects,
     });
 
@@ -360,31 +356,26 @@ const make = Effect.gen(function* () {
 
   const maybeGenerateAndRenameWorktreeBranchForFirstTurn = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
-    readonly branch: string | null;
-    readonly worktreePath: string | null;
     readonly messageId: string;
     readonly messageText: string;
     readonly attachments?: ReadonlyArray<ChatAttachment>;
   }) {
-    if (!input.branch || !input.worktreePath) {
+    const { thread, worktree } = yield* resolveThreadState(input.threadId);
+    if (!thread || !worktree) {
       return;
     }
-    if (!isTemporaryWorktreeBranch(input.branch)) {
+    if (!worktree.branchRenamePending || !worktree.branch) {
       return;
     }
 
-    const thread = yield* resolveThread(input.threadId);
-    if (!thread) {
-      return;
-    }
+    const cwd = worktree.workspacePath;
+    const oldBranch = worktree.branch;
 
     const userMessages = thread.messages.filter((message) => message.role === "user");
     if (userMessages.length !== 1 || userMessages[0]?.id !== input.messageId) {
       return;
     }
 
-    const oldBranch = input.branch;
-    const cwd = input.worktreePath;
     const attachments = input.attachments ?? [];
     yield* textGeneration
       .generateBranchName({
@@ -402,18 +393,21 @@ const make = Effect.gen(function* () {
         Effect.flatMap((generated) => {
           if (!generated) return Effect.void;
 
-          const targetBranch = buildGeneratedWorktreeBranchName(generated.branch);
+          const targetBranch = buildPrefixedBranchName(
+            extractBranchPrefix(oldBranch),
+            generated.branch,
+          );
           if (targetBranch === oldBranch) return Effect.void;
 
           return Effect.flatMap(
             git.renameBranch({ cwd, oldBranch, newBranch: targetBranch }),
             (renamed) =>
               orchestrationEngine.dispatch({
-                type: "thread.meta.update",
+                type: "worktree.meta.update",
                 commandId: serverCommandId("worktree-branch-rename"),
-                threadId: input.threadId,
+                worktreeId: worktree.id,
                 branch: renamed.branch,
-                worktreePath: cwd,
+                branchRenamePending: false,
               }),
           );
         }),
@@ -454,8 +448,6 @@ const make = Effect.gen(function* () {
 
     yield* maybeGenerateAndRenameWorktreeBranchForFirstTurn({
       threadId: event.payload.threadId,
-      branch: thread.branch,
-      worktreePath: thread.worktreePath,
       messageId: message.id,
       messageText: message.text,
       ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
