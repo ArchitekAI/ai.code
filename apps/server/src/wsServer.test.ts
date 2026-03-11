@@ -1694,10 +1694,62 @@ describe("WebSocket Server", () => {
     expect(response.error).toBeUndefined();
     expect(response.result).toEqual({
       relativePath: "plans/effect-rpc.md",
+      sha256: expect.stringMatching(/^[a-f0-9]{64}$/i),
     });
     expect(fs.readFileSync(path.join(workspace, "plans", "effect-rpc.md"), "utf8")).toBe(
       "# Plan\n\n- step 1\n",
     );
+  });
+
+  it("supports projects.readFile for text files within the workspace root", async () => {
+    const workspace = makeTempDir("t3code-ws-read-file-");
+    fs.writeFileSync(path.join(workspace, "README.md"), "# hello\n", "utf8");
+
+    server = await createTestServer({ cwd: "/test" });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const [ws] = await connectAndAwaitWelcome(port);
+    connections.push(ws);
+
+    const response = await sendRequest(ws, WS_METHODS.projectsReadFile, {
+      cwd: workspace,
+      relativePath: "README.md",
+    });
+
+    expect(response.error).toBeUndefined();
+    expect(response.result).toEqual({
+      kind: "text",
+      relativePath: "README.md",
+      sizeBytes: 8,
+      isBinary: false,
+      tooLarge: false,
+      contents: "# hello\n",
+      sha256: expect.stringMatching(/^[a-f0-9]{64}$/i),
+    });
+  });
+
+  it("rejects projects.writeFile when the expected hash is stale", async () => {
+    const workspace = makeTempDir("t3code-ws-write-file-conflict-");
+    fs.writeFileSync(path.join(workspace, "notes.md"), "before\n", "utf8");
+
+    server = await createTestServer({ cwd: "/test" });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const [ws] = await connectAndAwaitWelcome(port);
+    connections.push(ws);
+
+    const response = await sendRequest(ws, WS_METHODS.projectsWriteFile, {
+      cwd: workspace,
+      relativePath: "notes.md",
+      contents: "after\n",
+      expectedSha256: "0".repeat(64),
+    });
+
+    expect(response.result).toBeUndefined();
+    expect(response.error?.message).toContain("Reload it before saving again");
+    expect(fs.readFileSync(path.join(workspace, "notes.md"), "utf8")).toBe("before\n");
   });
 
   it("rejects projects.writeFile paths outside the workspace root", async () => {
@@ -1795,6 +1847,7 @@ describe("WebSocket Server", () => {
     const preparePullRequestThread = vi.fn(() => Effect.void as any);
     const gitManager: GitManagerShape = {
       status,
+      readWorkingTreeFileDiff: vi.fn(() => Effect.void as any),
       resolvePullRequest,
       preparePullRequestThread,
       runStackedAction,
@@ -1816,6 +1869,47 @@ describe("WebSocket Server", () => {
     expect(status).toHaveBeenCalledWith({ cwd: "/test" });
   });
 
+  it("supports git.readWorkingTreeFileDiff over websocket", async () => {
+    const diffResult = {
+      relativePath: "src/index.ts",
+      previousPath: null,
+      changeKind: "modified" as const,
+      unifiedDiff: "diff --git a/src/index.ts b/src/index.ts",
+      isBinary: false,
+      tooLarge: false,
+      originalContents: "before\n",
+      modifiedContents: "after\n",
+    };
+
+    const readWorkingTreeFileDiff = vi.fn(() => Effect.succeed(diffResult));
+    const gitManager: GitManagerShape = {
+      status: vi.fn(() => Effect.void as any),
+      readWorkingTreeFileDiff,
+      resolvePullRequest: vi.fn(() => Effect.void as any),
+      preparePullRequestThread: vi.fn(() => Effect.void as any),
+      runStackedAction: vi.fn(() => Effect.void as any),
+      updatePullRequest: vi.fn(() => Effect.void as any),
+    };
+
+    server = await createTestServer({ cwd: "/test", gitManager });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const [ws] = await connectAndAwaitWelcome(port);
+    connections.push(ws);
+
+    const response = await sendRequest(ws, WS_METHODS.gitReadWorkingTreeFileDiff, {
+      cwd: "/test",
+      relativePath: "src/index.ts",
+    });
+    expect(response.error).toBeUndefined();
+    expect(response.result).toEqual(diffResult);
+    expect(readWorkingTreeFileDiff).toHaveBeenCalledWith({
+      cwd: "/test",
+      relativePath: "src/index.ts",
+    });
+  });
+
   it("supports git pull request routing over websocket", async () => {
     const resolvePullRequestResult = {
       pullRequest: {
@@ -1835,6 +1929,7 @@ describe("WebSocket Server", () => {
 
     const gitManager: GitManagerShape = {
       status: vi.fn(() => Effect.void as any),
+      readWorkingTreeFileDiff: vi.fn(() => Effect.void as any),
       resolvePullRequest: vi.fn(() => Effect.succeed(resolvePullRequestResult)),
       preparePullRequestThread: vi.fn(() => Effect.succeed(preparePullRequestThreadResult)),
       runStackedAction: vi.fn(() => Effect.void as any),
@@ -1884,6 +1979,7 @@ describe("WebSocket Server", () => {
     );
     const gitManager: GitManagerShape = {
       status: vi.fn(() => Effect.void as any),
+      readWorkingTreeFileDiff: vi.fn(() => Effect.void as any),
       resolvePullRequest: vi.fn(() => Effect.void as any),
       preparePullRequestThread: vi.fn(() => Effect.void as any),
       runStackedAction,

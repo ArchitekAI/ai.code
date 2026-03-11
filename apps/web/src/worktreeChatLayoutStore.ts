@@ -20,11 +20,31 @@ export interface WorktreeRightRailState {
   changesExpandedPaths: string[] | null;
 }
 
-export interface WorktreeDockPanelParams {
+export interface WorktreeDockThreadPanelParams {
+  kind: "thread";
   threadId: ThreadId;
   worktreeId: WorktreeId;
   title?: string;
 }
+
+export interface WorktreeDockFilePanelParams {
+  kind: "file";
+  worktreeId: WorktreeId;
+  relativePath: string;
+  title?: string;
+}
+
+export interface WorktreeDockDiffPanelParams {
+  kind: "diff";
+  worktreeId: WorktreeId;
+  relativePath: string;
+  title?: string;
+}
+
+export type WorktreeDockPanelParams =
+  | WorktreeDockThreadPanelParams
+  | WorktreeDockFilePanelParams
+  | WorktreeDockDiffPanelParams;
 
 interface WorktreeChatLayoutStoreState {
   layoutsByWorktreeId: Partial<Record<WorktreeId, SerializedDockview>>;
@@ -52,6 +72,14 @@ export function createDefaultWorktreeRightRailState(): WorktreeRightRailState {
   };
 }
 
+export function buildFileDockPanelId(relativePath: string): string {
+  return `file::${relativePath}`;
+}
+
+export function buildDiffDockPanelId(relativePath: string): string {
+  return `diff::${relativePath}`;
+}
+
 export function selectWorktreeRightRailState(
   stateByWorktreeId: Partial<Record<WorktreeId, WorktreeRightRailState>>,
   worktreeId: WorktreeId,
@@ -72,25 +100,51 @@ function sanitizeDockPanelParams(
     return null;
   }
 
-  const threadId = value.threadId;
+  const kind =
+    value.kind === "thread" || value.kind === "file" || value.kind === "diff"
+      ? value.kind
+      : typeof value.threadId === "string"
+        ? "thread"
+        : null;
   const storedWorktreeId = value.worktreeId;
   const title = value.title;
-  if (
-    typeof threadId !== "string" ||
-    threadId.length === 0 ||
-    !validThreadIds.has(threadId as ThreadId)
-  ) {
-    return null;
-  }
   if (storedWorktreeId !== worktreeId) {
     return null;
   }
 
-  return {
-    threadId: threadId as ThreadId,
-    worktreeId,
-    ...(typeof title === "string" && title.length > 0 ? { title } : {}),
-  };
+  if (kind === "thread") {
+    const threadId = value.threadId;
+    if (
+      typeof threadId !== "string" ||
+      threadId.length === 0 ||
+      !validThreadIds.has(threadId as ThreadId)
+    ) {
+      return null;
+    }
+
+    return {
+      kind,
+      threadId: threadId as ThreadId,
+      worktreeId,
+      ...(typeof title === "string" && title.length > 0 ? { title } : {}),
+    };
+  }
+
+  if (kind === "file" || kind === "diff") {
+    const relativePath = value.relativePath;
+    if (typeof relativePath !== "string" || relativePath.length === 0) {
+      return null;
+    }
+
+    return {
+      kind,
+      worktreeId,
+      relativePath,
+      ...(typeof title === "string" && title.length > 0 ? { title } : {}),
+    };
+  }
+
+  return null;
 }
 
 function sanitizeSerializedGroupState(
@@ -263,7 +317,7 @@ export const useWorktreeChatLayoutStore = create<WorktreeChatLayoutStoreState>()
     }),
     {
       name: WORKTREE_CHAT_LAYOUT_STORAGE_KEY,
-      version: 2,
+      version: 3,
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
         layoutsByWorktreeId: state.layoutsByWorktreeId,

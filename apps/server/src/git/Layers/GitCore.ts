@@ -9,6 +9,7 @@ const STATUS_UPSTREAM_REFRESH_INTERVAL = Duration.seconds(15);
 const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(5);
 const STATUS_UPSTREAM_REFRESH_CACHE_CAPACITY = 2_048;
 const DEFAULT_BASE_BRANCH_CANDIDATES = ["main", "master"] as const;
+const WORKING_TREE_DIFF_TEXT_MAX_BYTES = 1_048_576;
 
 class StatusUpstreamRefreshCacheKey extends Data.Class<{
   cwd: string;
@@ -341,6 +342,186 @@ const makeGitCore = Effect.gen(function* () {
     executeGit(operation, cwd, args, { allowNonZeroExit }).pipe(
       Effect.map((result) => result.stdout),
     );
+
+  const isLikelyBinaryFile = (contents: Uint8Array): boolean => {
+    const limit = Math.min(contents.length, 8_000);
+    for (let index = 0; index < limit; index += 1) {
+      if (contents[index] === 0) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const readWorkspaceFile = (
+    cwd: string,
+    relativePath: string,
+  ): Effect.Effect<
+    {
+      exists: boolean;
+      sizeBytes: number;
+      tooLarge: boolean;
+      isBinary: boolean;
+      text: string | null;
+    },
+    GitCommandError
+  > =>
+    Effect.gen(function* () {
+      const absolutePath = path.resolve(cwd, relativePath);
+      const exists = yield* fileSystem
+        .exists(absolutePath)
+        .pipe(Effect.catch(() => Effect.succeed(false)));
+      if (!exists) {
+        return { exists: false, sizeBytes: 0, tooLarge: false, isBinary: false, text: null };
+      }
+      const bytes = yield* fileSystem.readFile(absolutePath).pipe(
+        Effect.map((value) => new Uint8Array(value)),
+        Effect.mapError((cause) =>
+          createGitCommandError(
+            "GitCore.readWorkingTreeFileDiff.readWorkspaceFile",
+            cwd,
+            ["diff", "--", relativePath],
+            `Failed to read ${relativePath}: ${cause instanceof Error ? cause.message : String(cause)}`,
+            cause,
+          ),
+        ),
+      );
+      const tooLarge = bytes.byteLength > WORKING_TREE_DIFF_TEXT_MAX_BYTES;
+      const isBinary = !tooLarge && isLikelyBinaryFile(bytes);
+      return {
+        exists: true,
+        sizeBytes: bytes.byteLength,
+        tooLarge,
+        isBinary,
+        text: tooLarge || isBinary ? null : Buffer.from(bytes).toString("utf8"),
+      };
+    });
+
+  const readHeadBlobText = (
+    cwd: string,
+    relativePath: string,
+  ): Effect.Effect<
+    { exists: boolean; sizeBytes: number; tooLarge: boolean; text: string | null },
+    GitCommandError
+  > =>
+    Effect.gen(function* () {
+      const catFileResult = yield* executeGit(
+        "GitCore.readWorkingTreeFileDiff.catFileSize",
+        cwd,
+        ["cat-file", "-s", `HEAD:${relativePath}`],
+        { allowNonZeroExit: true, timeoutMs: 10_000 },
+      );
+      if (catFileResult.code !== 0) {
+        return { exists: false, sizeBytes: 0, tooLarge: false, text: null };
+      }
+      const sizeBytes = Number.parseInt(catFileResult.stdout.trim(), 10);
+      const tooLarge = Number.isFinite(sizeBytes) && sizeBytes > WORKING_TREE_DIFF_TEXT_MAX_BYTES;
+      if (tooLarge) {
+        return { exists: true, sizeBytes, tooLarge: true, text: null };
+      }
+      const contentResult = yield* executeGit(
+        "GitCore.readWorkingTreeFileDiff.showHeadBlob",
+        cwd,
+        ["show", `HEAD:${relativePath}`],
+        { allowNonZeroExit: true, timeoutMs: 10_000 },
+      );
+      if (contentResult.code !== 0) {
+        return { exists: false, sizeBytes: 0, tooLarge: false, text: null };
+      }
+      return {
+        exists: true,
+        sizeBytes: Number.isFinite(sizeBytes) ? sizeBytes : Buffer.byteLength(contentResult.stdout),
+        tooLarge: false,
+        text: contentResult.stdout,
+      };
+    });
+
+  const resolveWorkingTreeDiffMetadata = (
+    cwd: string,
+    relativePath: string,
+  ): Effect.Effect<
+    {
+      changeKind: "added" | "modified" | "deleted" | "renamed" | "copied" | "untracked";
+      previousPath: string | null;
+      unifiedDiff: string;
+      isBinary: boolean;
+    },
+    GitCommandError
+  > =>
+    Effect.gen(function* () {
+      const statusOutput = yield* runGitStdout(
+        "GitCore.readWorkingTreeFileDiff.nameStatus",
+        cwd,
+        ["diff", "--name-status", "--find-renames", "--find-copies", "HEAD", "--", relativePath],
+        true,
+      );
+      const statusLine = statusOutput
+        .split(/\r?\n/g)
+        .map((line) => line.trim())
+        .find((line) => line.length > 0);
+      if (statusLine) {
+        const parts = statusLine.split("\t");
+        const statusToken = parts[0] ?? "";
+        const statusCode = statusToken[0] ?? "M";
+        const previousPath = statusCode === "R" || statusCode === "C" ? (parts[1] ?? null) : null;
+        const unifiedDiff = yield* runGitStdout(
+          "GitCore.readWorkingTreeFileDiff.unifiedDiff",
+          cwd,
+          ["diff", "--find-renames", "--find-copies", "--binary", "HEAD", "--", relativePath],
+          true,
+        );
+        const numstatOutput = yield* runGitStdout(
+          "GitCore.readWorkingTreeFileDiff.numstat",
+          cwd,
+          ["diff", "--numstat", "--find-renames", "--find-copies", "HEAD", "--", relativePath],
+          true,
+        );
+        const isBinary = numstatOutput
+          .split(/\r?\n/g)
+          .some((line) => line.startsWith("-\t-\t") || line.startsWith("- - "));
+        return {
+          changeKind:
+            statusCode === "A"
+              ? "added"
+              : statusCode === "D"
+                ? "deleted"
+                : statusCode === "R"
+                  ? "renamed"
+                  : statusCode === "C"
+                    ? "copied"
+                    : "modified",
+          previousPath,
+          unifiedDiff,
+          isBinary,
+        };
+      }
+
+      const porcelain = yield* runGitStdout(
+        "GitCore.readWorkingTreeFileDiff.status",
+        cwd,
+        ["status", "--porcelain=1", "--", relativePath],
+        true,
+      );
+      const porcelainLine = porcelain
+        .split(/\r?\n/g)
+        .map((line) => line.trim())
+        .find((line) => line.length > 0);
+      if (porcelainLine?.startsWith("?? ")) {
+        return {
+          changeKind: "untracked",
+          previousPath: null,
+          unifiedDiff: "",
+          isBinary: false,
+        };
+      }
+
+      return yield* createGitCommandError(
+        "GitCore.readWorkingTreeFileDiff",
+        cwd,
+        ["diff", "--", relativePath],
+        `No working tree diff found for ${relativePath}.`,
+      );
+    });
 
   const branchExists = (cwd: string, branch: string): Effect.Effect<boolean, GitCommandError> =>
     executeGit(
@@ -836,6 +1017,37 @@ const makeGitCore = Effect.gen(function* () {
         pr: null,
       })),
     );
+
+  const readWorkingTreeFileDiff: GitCoreShape["readWorkingTreeFileDiff"] = (input) =>
+    Effect.gen(function* () {
+      const metadata = yield* resolveWorkingTreeDiffMetadata(input.cwd, input.relativePath);
+      const headPath = metadata.previousPath ?? input.relativePath;
+      const originalFile =
+        metadata.changeKind === "added" || metadata.changeKind === "untracked"
+          ? { exists: false, sizeBytes: 0, tooLarge: false, text: null }
+          : yield* readHeadBlobText(input.cwd, headPath);
+      const modifiedFile =
+        metadata.changeKind === "deleted"
+          ? { exists: false, sizeBytes: 0, tooLarge: false, isBinary: false, text: null }
+          : yield* readWorkspaceFile(input.cwd, input.relativePath);
+
+      return {
+        relativePath: input.relativePath,
+        previousPath: metadata.previousPath,
+        changeKind: metadata.changeKind,
+        unifiedDiff: metadata.unifiedDiff,
+        isBinary: metadata.isBinary || modifiedFile.isBinary,
+        tooLarge: originalFile.tooLarge || modifiedFile.tooLarge,
+        originalContents:
+          !metadata.isBinary && !originalFile.tooLarge && originalFile.exists
+            ? (originalFile.text ?? "")
+            : null,
+        modifiedContents:
+          !metadata.isBinary && !modifiedFile.tooLarge && modifiedFile.exists
+            ? (modifiedFile.text ?? "")
+            : null,
+      };
+    });
 
   const prepareCommitContext: GitCoreShape["prepareCommitContext"] = (cwd) =>
     Effect.gen(function* () {
@@ -1484,6 +1696,7 @@ const makeGitCore = Effect.gen(function* () {
   return {
     status,
     statusDetails,
+    readWorkingTreeFileDiff,
     prepareCommitContext,
     commit,
     pushCurrentBranch,

@@ -7,6 +7,7 @@
  * @module Server
  */
 import http from "node:http";
+import { createHash } from "node:crypto";
 import type { Duplex } from "node:stream";
 
 import Mime from "@effect/platform-node/Mime";
@@ -109,6 +110,7 @@ export interface ServerShape {
 export class Server extends ServiceMap.Service<Server, ServerShape>()("t3/wsServer/Server") {}
 
 const TEXT_ATTACHMENT_PREVIEW_MAX_CHARS = 180;
+const WORKSPACE_TEXT_FILE_MAX_BYTES = 1_048_576;
 
 function buildTextAttachmentPreview(text: string): string {
   return text.replace(/\s+/g, " ").trim().slice(0, TEXT_ATTACHMENT_PREVIEW_MAX_CHARS);
@@ -168,7 +170,7 @@ function toPosixRelativePath(input: string): string {
   return input.replaceAll("\\", "/");
 }
 
-function resolveWorkspaceWritePath(params: {
+function resolveWorkspacePath(params: {
   workspaceRoot: string;
   relativePath: string;
   path: Path.Path;
@@ -204,6 +206,20 @@ function resolveWorkspaceWritePath(params: {
     absolutePath,
     relativePath: relativeToRoot,
   });
+}
+
+function isLikelyBinaryFile(contents: Uint8Array): boolean {
+  const limit = Math.min(contents.length, 8_000);
+  for (let index = 0; index < limit; index += 1) {
+    if (contents[index] === 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function sha256Hex(contents: Uint8Array): string {
+  return createHash("sha256").update(contents).digest("hex");
 }
 
 function stripRequestTag<T extends { _tag: string }>(body: T) {
@@ -799,11 +815,34 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
 
       case WS_METHODS.projectsWriteFile: {
         const body = stripRequestTag(request.body);
-        const target = yield* resolveWorkspaceWritePath({
+        const target = yield* resolveWorkspacePath({
           workspaceRoot: body.cwd,
           relativePath: body.relativePath,
           path,
         });
+        const nextContents = Buffer.from(body.contents, "utf8");
+        if (body.expectedSha256) {
+          const fileExists = yield* fileSystem
+            .exists(target.absolutePath)
+            .pipe(Effect.catch(() => Effect.succeed(false)));
+          const existingBytes = fileExists
+            ? yield* fileSystem.readFile(target.absolutePath).pipe(
+                Effect.map((bytes) => new Uint8Array(bytes)),
+                Effect.mapError(
+                  (cause) =>
+                    new RouteRequestError({
+                      message: `Failed to read workspace file: ${String(cause)}`,
+                    }),
+                ),
+              )
+            : null;
+          const actualSha256 = existingBytes ? sha256Hex(existingBytes) : null;
+          if (actualSha256 !== body.expectedSha256) {
+            return yield* new RouteRequestError({
+              message: "Workspace file changed on disk. Reload it before saving again.",
+            });
+          }
+        }
         yield* fileSystem
           .makeDirectory(path.dirname(target.absolutePath), { recursive: true })
           .pipe(
@@ -814,7 +853,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
                 }),
             ),
           );
-        yield* fileSystem.writeFileString(target.absolutePath, body.contents).pipe(
+        yield* fileSystem.writeFile(target.absolutePath, nextContents).pipe(
           Effect.mapError(
             (cause) =>
               new RouteRequestError({
@@ -822,7 +861,55 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
               }),
           ),
         );
-        return { relativePath: target.relativePath };
+        return { relativePath: target.relativePath, sha256: sha256Hex(nextContents) };
+      }
+
+      case WS_METHODS.projectsReadFile: {
+        const body = stripRequestTag(request.body);
+        const target = yield* resolveWorkspacePath({
+          workspaceRoot: body.cwd,
+          relativePath: body.relativePath,
+          path,
+        });
+        const contents = yield* fileSystem.readFile(target.absolutePath).pipe(
+          Effect.map((bytes) => new Uint8Array(bytes)),
+          Effect.mapError(
+            (cause) =>
+              new RouteRequestError({
+                message: `Failed to read workspace file: ${String(cause)}`,
+              }),
+          ),
+        );
+        const sizeBytes = contents.byteLength;
+        const tooLarge = sizeBytes > WORKSPACE_TEXT_FILE_MAX_BYTES;
+        const isBinary = !tooLarge && isLikelyBinaryFile(contents);
+        if (tooLarge) {
+          return {
+            kind: "too_large" as const,
+            relativePath: target.relativePath,
+            sizeBytes,
+            isBinary: false,
+            tooLarge: true,
+          };
+        }
+        if (isBinary) {
+          return {
+            kind: "binary" as const,
+            relativePath: target.relativePath,
+            sizeBytes,
+            isBinary: true,
+            tooLarge: false,
+          };
+        }
+        return {
+          kind: "text" as const,
+          relativePath: target.relativePath,
+          sizeBytes,
+          isBinary: false,
+          tooLarge: false,
+          contents: Buffer.from(contents).toString("utf8"),
+          sha256: sha256Hex(contents),
+        };
       }
 
       case WS_METHODS.shellOpenInEditor: {
@@ -833,6 +920,11 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       case WS_METHODS.gitStatus: {
         const body = stripRequestTag(request.body);
         return yield* gitManager.status(body);
+      }
+
+      case WS_METHODS.gitReadWorkingTreeFileDiff: {
+        const body = stripRequestTag(request.body);
+        return yield* gitManager.readWorkingTreeFileDiff(body);
       }
 
       case WS_METHODS.gitPull: {

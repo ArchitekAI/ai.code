@@ -114,6 +114,7 @@ export function createWsNativeApi(): NativeApi {
     projects: {
       listEntries: (input) => transport.request(WS_METHODS.projectsListEntries, input),
       searchEntries: (input) => transport.request(WS_METHODS.projectsSearchEntries, input),
+      readFile: (input) => transport.request(WS_METHODS.projectsReadFile, input),
       writeFile: (input) => transport.request(WS_METHODS.projectsWriteFile, input),
     },
     shell: {
@@ -136,6 +137,8 @@ export function createWsNativeApi(): NativeApi {
     git: {
       pull: (input) => transport.request(WS_METHODS.gitPull, input),
       status: (input) => transport.request(WS_METHODS.gitStatus, input),
+      readWorkingTreeFileDiff: (input) =>
+        transport.request(WS_METHODS.gitReadWorkingTreeFileDiff, input),
       runStackedAction: (input) => transport.request(WS_METHODS.gitRunStackedAction, input),
       listBranches: (input) => transport.request(WS_METHODS.gitListBranches, input),
       createWorktree: (input) => transport.request(WS_METHODS.gitCreateWorktree, input),

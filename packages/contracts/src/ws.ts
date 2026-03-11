@@ -27,6 +27,7 @@ import {
   GitListBranchesInput,
   GitPullInput,
   GitPullRequestRefInput,
+  GitReadWorkingTreeFileDiffInput,
   GitRemoveWorktreeInput,
   GitRunStackedActionInput,
   GitStatusInput,
@@ -45,6 +46,7 @@ import {
 import { KeybindingRule } from "./keybindings";
 import {
   ProjectListEntriesInput,
+  ProjectReadFileInput,
   ProjectSearchEntriesInput,
   ProjectWriteFileInput,
 } from "./project";
@@ -66,6 +68,7 @@ export const WS_METHODS = {
   projectsRemove: "projects.remove",
   projectsListEntries: "projects.listEntries",
   projectsSearchEntries: "projects.searchEntries",
+  projectsReadFile: "projects.readFile",
   projectsWriteFile: "projects.writeFile",
 
   // Shell methods
@@ -74,6 +77,7 @@ export const WS_METHODS = {
   // Git methods
   gitPull: "git.pull",
   gitStatus: "git.status",
+  gitReadWorkingTreeFileDiff: "git.readWorkingTreeFileDiff",
   gitRunStackedAction: "git.runStackedAction",
   gitListBranches: "git.listBranches",
   gitCreateWorktree: "git.createWorktree",
@@ -140,6 +144,7 @@ const WebSocketRequestBody = Schema.Union([
   // Project Search
   tagRequestBody(WS_METHODS.projectsListEntries, ProjectListEntriesInput),
   tagRequestBody(WS_METHODS.projectsSearchEntries, ProjectSearchEntriesInput),
+  tagRequestBody(WS_METHODS.projectsReadFile, ProjectReadFileInput),
   tagRequestBody(WS_METHODS.projectsWriteFile, ProjectWriteFileInput),
 
   // Shell methods
@@ -148,6 +153,7 @@ const WebSocketRequestBody = Schema.Union([
   // Git methods
   tagRequestBody(WS_METHODS.gitPull, GitPullInput),
   tagRequestBody(WS_METHODS.gitStatus, GitStatusInput),
+  tagRequestBody(WS_METHODS.gitReadWorkingTreeFileDiff, GitReadWorkingTreeFileDiffInput),
   tagRequestBody(WS_METHODS.gitRunStackedAction, GitRunStackedActionInput),
   tagRequestBody(WS_METHODS.gitListBranches, GitListBranchesInput),
   tagRequestBody(WS_METHODS.gitCreateWorktree, GitCreateWorktreeInput),

@@ -59,6 +59,7 @@ function createLayout(): SerializedDockview {
         contentComponent: "thread-chat",
         title: "Thread A",
         params: {
+          kind: "thread",
           threadId: THREAD_A,
           worktreeId: WORKTREE_ID,
           title: "Thread A",
@@ -69,6 +70,7 @@ function createLayout(): SerializedDockview {
         contentComponent: "thread-chat",
         title: "Thread B",
         params: {
+          kind: "thread",
           threadId: THREAD_B,
           worktreeId: WORKTREE_ID,
           title: "Thread B",
@@ -141,6 +143,7 @@ describe("worktreeChatLayoutStore", () => {
     layout.panels[THREAD_A] = {
       ...threadAPanel,
       params: {
+        kind: "thread",
         threadId: THREAD_A,
         worktreeId: OTHER_WORKTREE_ID,
       },
@@ -195,5 +198,52 @@ describe("worktreeChatLayoutStore", () => {
       allFilesViewMode: "tree",
       changesViewMode: "tree",
     });
+  });
+
+  it("preserves file and diff panels for the same worktree", () => {
+    const layout = createLayout();
+    layout.panels["file::src/app.ts"] = {
+      id: "file::src/app.ts",
+      contentComponent: "workspace-file",
+      title: "app.ts",
+      params: {
+        kind: "file",
+        worktreeId: WORKTREE_ID,
+        relativePath: "src/app.ts",
+        title: "app.ts",
+      },
+    };
+    layout.panels["diff::src/app.ts"] = {
+      id: "diff::src/app.ts",
+      contentComponent: "workspace-diff",
+      title: "app.ts",
+      params: {
+        kind: "diff",
+        worktreeId: WORKTREE_ID,
+        relativePath: "src/app.ts",
+        title: "app.ts",
+      },
+    };
+    layout.grid.root = {
+      type: "leaf",
+      size: 1,
+      data: {
+        id: "group-1",
+        views: [THREAD_A, "file::src/app.ts", "diff::src/app.ts"],
+        activeView: "file::src/app.ts",
+      },
+    } as SerializedDockview["grid"]["root"];
+
+    const sanitized = worktreeChatLayoutStoreModule.sanitizeSerializedDockviewLayout({
+      layout,
+      validThreadIds: new Set([THREAD_A]),
+      worktreeId: WORKTREE_ID,
+    });
+
+    expect(Object.keys(sanitized?.panels ?? {}).toSorted()).toEqual([
+      "diff::src/app.ts",
+      "file::src/app.ts",
+      THREAD_A,
+    ]);
   });
 });

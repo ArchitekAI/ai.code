@@ -36,6 +36,9 @@ import ProjectScriptsControl, { type NewProjectScriptInput } from "./ProjectScri
 import { PROVIDER_ICON_BY_PROVIDER } from "./providerIcons";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import WorktreeRightRail from "./WorktreeRightRail";
+import WorkspaceDiffPanel from "./WorkspaceDiffPanel";
+import WorkspaceFilePanel from "./WorkspaceFilePanel";
+import VscodeEntryIcon from "./VscodeEntryIcon";
 import { Button } from "./ui/button";
 import { KbdTooltip } from "./ui/kbd-tooltip";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
@@ -79,15 +82,23 @@ import {
   shortcutLabelForCommand,
 } from "../keybindings";
 import {
+  buildDiffDockPanelId,
+  buildFileDockPanelId,
   createDefaultWorktreeRightRailState,
+  type WorktreeDockDiffPanelParams,
+  type WorktreeDockFilePanelParams,
   type WorktreeDockPanelParams,
+  type WorktreeDockThreadPanelParams,
   type WorktreeRightRailState,
   sanitizeSerializedDockviewLayout,
   useWorktreeChatLayoutStore,
 } from "../worktreeChatLayoutStore";
+import { useWorkspaceDockPanelStore } from "../workspaceDockPanelStore";
 
 const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "t3code:last-invoked-script-by-project";
 const DOCKVIEW_THREAD_COMPONENT = "thread-chat";
+const DOCKVIEW_FILE_COMPONENT = "workspace-file";
+const DOCKVIEW_DIFF_COMPONENT = "workspace-diff";
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_AVAILABLE_EDITORS: EditorId[] = [];
 const MIN_RIGHT_RAIL_WIDTH = 260;
@@ -96,6 +107,20 @@ const MAX_RIGHT_RAIL_WIDTH = 520;
 function clampRightRailWidth(width: number): number {
   const safeWidth = Number.isFinite(width) ? width : MIN_RIGHT_RAIL_WIDTH;
   return Math.min(Math.max(Math.round(safeWidth), MIN_RIGHT_RAIL_WIDTH), MAX_RIGHT_RAIL_WIDTH);
+}
+
+function basename(relativePath: string): string {
+  return relativePath.split("/").at(-1) ?? relativePath;
+}
+
+function isThreadPanelParams(
+  params: WorktreeDockPanelParams,
+): params is WorktreeDockThreadPanelParams {
+  return params.kind === "thread";
+}
+
+function threadIdFromPanelParams(params: WorktreeDockPanelParams): ThreadId | null {
+  return params.kind === "thread" ? params.threadId : null;
 }
 
 declare global {
@@ -129,6 +154,7 @@ interface DockThreadHeaderActionsExtraProps {
   projectName: string | null;
   worktreeSubtitle: string | null;
   unopenedThreads: readonly WorkspaceThreadEntry[];
+  referenceThreadId: ThreadId | null;
   onCreateThread: (referencePanelId: ThreadId | null) => void;
   onOpenThread: (threadId: ThreadId, referencePanelId: ThreadId | null) => void;
 }
@@ -157,7 +183,7 @@ function DockThreadPanel({
   focusThreadId,
   onActivateThread,
   api,
-}: IDockviewPanelProps<WorktreeDockPanelParams> & {
+}: IDockviewPanelProps<WorktreeDockThreadPanelParams> & {
   routeThreadId: ThreadId;
   focusThreadId: ThreadId;
   onActivateThread: (threadId: ThreadId) => void;
@@ -202,52 +228,87 @@ function useDockPanelTitle(api: IDockviewPanelHeaderProps<WorktreeDockPanelParam
   return title;
 }
 
-function DockThreadTab(props: IDockviewPanelHeaderProps<WorktreeDockPanelParams>) {
+function DockWorkspaceTab(props: IDockviewPanelHeaderProps<WorktreeDockPanelParams>) {
   const title = useDockPanelTitle(props.api);
+  const { resolvedTheme } = useTheme();
+  const threadParams = props.params.kind === "thread" ? props.params : null;
+  const panelMeta = useWorkspaceDockPanelStore(
+    useCallback((state) => state.metaByPanelId[props.api.id] ?? null, [props.api.id]),
+  );
   const serverThread = useStore(
     useCallback(
-      (store) => store.threads.find((thread) => thread.id === props.params.threadId) ?? null,
-      [props.params.threadId],
+      (store) =>
+        threadParams
+          ? (store.threads.find((thread) => thread.id === threadParams.threadId) ?? null)
+          : null,
+      [threadParams],
     ),
   );
   const draftProvider = useComposerDraftStore(
     useCallback(
-      (store) => store.draftsByThreadId[props.params.threadId]?.provider ?? null,
-      [props.params.threadId],
+      (store) =>
+        threadParams ? (store.draftsByThreadId[threadParams.threadId]?.provider ?? null) : null,
+      [threadParams],
     ),
   );
 
   const provider: ProviderKind = serverThread?.session?.provider ?? draftProvider ?? "codex";
   const ProviderIcon = PROVIDER_ICON_BY_PROVIDER[provider];
-  const threadStatus = serverThread ? resolveThreadStatusVisual(serverThread) : null;
+  const threadStatus =
+    threadParams && serverThread ? resolveThreadStatusVisual(serverThread) : null;
+  const tabLabel =
+    title || (props.params.kind === "thread" ? "Thread" : basename(props.params.relativePath));
 
   return (
     <div className="dv-default-tab">
       <div className="dv-default-tab-content">
         <span className="flex min-w-0 items-center gap-1.5">
-          <ProviderIcon aria-hidden="true" className="size-3 shrink-0 opacity-75" />
-          {threadStatus ? (
-            <span
-              aria-label={threadStatus.label}
-              className="inline-flex shrink-0"
-              data-dock-thread-status={threadStatus.kind}
-              data-thread-id={props.params.threadId}
-              title={threadStatus.label}
-            >
-              <span
-                aria-hidden="true"
-                className={`h-1.5 w-1.5 rounded-full ${threadStatus.dotClass} ${
-                  threadStatus.pulse ? "animate-pulse" : ""
-                }`}
+          {props.params.kind === "thread" ? (
+            <>
+              <ProviderIcon aria-hidden="true" className="size-3 shrink-0 opacity-75" />
+              {threadStatus ? (
+                <span
+                  aria-label={threadStatus.label}
+                  className="inline-flex shrink-0"
+                  data-dock-thread-status={threadStatus.kind}
+                  data-thread-id={props.params.threadId}
+                  title={threadStatus.label}
+                >
+                  <span
+                    aria-hidden="true"
+                    className={`h-1.5 w-1.5 rounded-full ${threadStatus.dotClass} ${
+                      threadStatus.pulse ? "animate-pulse" : ""
+                    }`}
+                  />
+                </span>
+              ) : null}
+            </>
+          ) : (
+            <>
+              <VscodeEntryIcon
+                pathValue={props.params.relativePath}
+                kind="file"
+                theme={resolvedTheme === "dark" ? "dark" : "light"}
               />
-            </span>
-          ) : null}
-          <span className="truncate">{title}</span>
+              {panelMeta?.dirty ? (
+                <span
+                  aria-label="Unsaved changes"
+                  className="inline-flex h-2 w-2 shrink-0 rounded-full bg-warning"
+                />
+              ) : null}
+            </>
+          )}
+          <span
+            className="truncate"
+            title={props.params.kind === "thread" ? tabLabel : props.params.relativePath}
+          >
+            {tabLabel}
+          </span>
         </span>
       </div>
       {props.tabLocation === "header" ? (
         <button
-          aria-label={`Close ${title || "thread"}`}
+          aria-label={`Close ${tabLabel || "tab"}`}
           className="dv-default-tab-action appearance-none border-0 bg-transparent text-inherit"
           type="button"
           onClick={(event) => {
@@ -267,22 +328,45 @@ function DockThreadTab(props: IDockviewPanelHeaderProps<WorktreeDockPanelParams>
   );
 }
 
-function buildThreadPanelParams(entry: WorkspaceThreadEntry): WorktreeDockPanelParams {
+function buildThreadPanelParams(entry: WorkspaceThreadEntry): WorktreeDockThreadPanelParams {
   return {
+    kind: "thread",
     threadId: entry.threadId,
     worktreeId: entry.worktreeId,
     title: entry.title,
   };
 }
 
+function buildFilePanelParams(
+  worktreeId: WorktreeId,
+  relativePath: string,
+): WorktreeDockFilePanelParams {
+  return {
+    kind: "file",
+    worktreeId,
+    relativePath,
+    title: basename(relativePath),
+  };
+}
+
+function buildDiffPanelParams(
+  worktreeId: WorktreeId,
+  relativePath: string,
+): WorktreeDockDiffPanelParams {
+  return {
+    kind: "diff",
+    worktreeId,
+    relativePath,
+    title: basename(relativePath),
+  };
+}
+
 function DockThreadHeaderActions({
-  activePanel,
-  panels,
   worktree,
+  referenceThreadId,
   onCreateThread,
 }: DockviewHeaderActionsProps &
-  Pick<DockThreadHeaderActionsExtraProps, "worktree" | "onCreateThread">) {
-  const referencePanelId = (activePanel?.id ?? panels[0]?.id ?? null) as ThreadId | null;
+  Pick<DockThreadHeaderActionsExtraProps, "worktree" | "referenceThreadId" | "onCreateThread">) {
   const worktreeTitle = worktree ? worktreeDisplayTitle(worktree) : "Threads";
   return (
     <div className="dockview-thread-actions flex items-center gap-0.5 pr-1">
@@ -293,7 +377,7 @@ function DockThreadHeaderActions({
           disabled={!worktree}
           size="icon-xs"
           variant="ghost"
-          onClick={() => onCreateThread(referencePanelId)}
+          onClick={() => onCreateThread(referenceThreadId)}
         >
           <PlusIcon className="size-3.5" />
         </Button>
@@ -303,16 +387,14 @@ function DockThreadHeaderActions({
 }
 
 function DockThreadHistoryAction({
-  activePanel,
-  panels,
   worktree,
   projectName,
+  referenceThreadId,
   worktreeSubtitle,
   unopenedThreads,
   onOpenThread,
 }: DockviewHeaderActionsProps & DockThreadHeaderActionsExtraProps) {
   const [pickerOpen, setPickerOpen] = useState(false);
-  const referencePanelId = (activePanel?.id ?? panels[0]?.id ?? null) as ThreadId | null;
   const worktreeTitle = worktree ? worktreeDisplayTitle(worktree) : "Threads";
 
   return (
@@ -347,7 +429,7 @@ function DockThreadHistoryAction({
                     className="flex h-6.5 w-full items-center justify-between gap-2.5 rounded-md px-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                     type="button"
                     onClick={() => {
-                      onOpenThread(entry.threadId, referencePanelId);
+                      onOpenThread(entry.threadId, referenceThreadId);
                       setPickerOpen(false);
                     }}
                   >
@@ -405,7 +487,7 @@ export default function WorktreeChatWorkspace({
   const [focusedDockThreadId, setFocusedDockThreadId] = useState<ThreadId>(threadId);
   const [terminalFocusRequestId, setTerminalFocusRequestId] = useState(0);
   const restoredRef = useRef(false);
-  const pendingPanelReferenceIdRef = useRef<ThreadId | null>(null);
+  const pendingPanelReferenceIdRef = useRef<string | null>(null);
   const rightRailResizeStateRef = useRef<{
     pointerId: number;
     startX: number;
@@ -915,24 +997,27 @@ export default function WorktreeChatWorkspace({
     }
   }, [lastInvokedScriptByProjectId]);
 
-  const addThreadPanel = useCallback(
-    (api: DockviewApi, targetThreadId: ThreadId, referencePanelId?: ThreadId | null) => {
-      const entry = workspaceThreadsById.get(targetThreadId);
-      if (!entry) {
-        return null;
-      }
-
+  const addDockPanel = useCallback(
+    (
+      api: DockviewApi,
+      input: {
+        id: string;
+        component: string;
+        title: string;
+        params: WorktreeDockPanelParams;
+        referencePanelId?: string | null;
+      },
+    ) => {
       const resolvedReferencePanelId =
-        referencePanelId ?? pendingPanelReferenceIdRef.current ?? null;
+        input.referencePanelId ?? pendingPanelReferenceIdRef.current ?? null;
       const referencePanel =
         (resolvedReferencePanelId ? api.getPanel(resolvedReferencePanelId) : null) ??
         api.activePanel;
-
       const panel = api.addPanel<WorktreeDockPanelParams>({
-        id: targetThreadId,
-        component: DOCKVIEW_THREAD_COMPONENT,
-        title: entry.title,
-        params: buildThreadPanelParams(entry),
+        id: input.id,
+        component: input.component,
+        title: input.title,
+        params: input.params,
         renderer: "always",
         ...(referencePanel
           ? {
@@ -946,7 +1031,25 @@ export default function WorktreeChatWorkspace({
       pendingPanelReferenceIdRef.current = null;
       return panel;
     },
-    [workspaceThreadsById],
+    [],
+  );
+
+  const addThreadPanel = useCallback(
+    (api: DockviewApi, targetThreadId: ThreadId, referencePanelId?: string | null) => {
+      const entry = workspaceThreadsById.get(targetThreadId);
+      if (!entry) {
+        return null;
+      }
+
+      return addDockPanel(api, {
+        id: targetThreadId,
+        component: DOCKVIEW_THREAD_COMPONENT,
+        title: entry.title,
+        params: buildThreadPanelParams(entry),
+        ...(referencePanelId !== undefined ? { referencePanelId } : {}),
+      });
+    },
+    [addDockPanel, workspaceThreadsById],
   );
 
   const openThreadInGroup = useCallback(
@@ -965,6 +1068,37 @@ export default function WorktreeChatWorkspace({
       }
     },
     [addThreadPanel, dockviewApi],
+  );
+
+  const openWorkspaceFile = useCallback(
+    (relativePath: string, panelType: "file" | "diff") => {
+      if (!dockviewApi) {
+        return;
+      }
+      const panelId =
+        panelType === "file"
+          ? buildFileDockPanelId(relativePath)
+          : buildDiffDockPanelId(relativePath);
+      const existingPanel = dockviewApi.getPanel(panelId);
+      if (existingPanel) {
+        existingPanel.api.setActive();
+        return;
+      }
+      const panel = addDockPanel(dockviewApi, {
+        id: panelId,
+        component: panelType === "file" ? DOCKVIEW_FILE_COMPONENT : DOCKVIEW_DIFF_COMPONENT,
+        title: basename(relativePath),
+        params:
+          panelType === "file"
+            ? buildFilePanelParams(worktreeId, relativePath)
+            : buildDiffPanelParams(worktreeId, relativePath),
+      });
+      panel?.api.setActive();
+      if (isMobile && rightRailState.open) {
+        setRightRailState({ open: false });
+      }
+    },
+    [addDockPanel, dockviewApi, isMobile, rightRailState.open, setRightRailState, worktreeId],
   );
 
   const handleCreateThread = useCallback(
@@ -1020,7 +1154,12 @@ export default function WorktreeChatWorkspace({
   );
 
   const unopenedThreads = useMemo(() => {
-    const openThreadIds = new Set((dockviewApi?.panels ?? []).map((panel) => panel.id as ThreadId));
+    const openThreadIds = new Set(
+      (dockviewApi?.panels ?? [])
+        .map((panel) => panel.api.getParameters<WorktreeDockPanelParams>())
+        .filter(isThreadPanelParams)
+        .map((panel) => panel.threadId),
+    );
     return [...workspaceThreadsById.values()]
       .filter((entry) => !openThreadIds.has(entry.threadId))
       .toSorted(
@@ -1030,15 +1169,23 @@ export default function WorktreeChatWorkspace({
       );
   }, [dockviewApi?.panels, workspaceThreadsById]);
 
+  const referenceThreadId = useMemo(() => {
+    if (workspaceThreadsById.has(focusedDockThreadId)) {
+      return focusedDockThreadId;
+    }
+    return workspaceThreadsById.has(threadId) ? threadId : null;
+  }, [focusedDockThreadId, threadId, workspaceThreadsById]);
+
   const leftHeaderActionsComponent = useCallback(
     (props: DockviewHeaderActionsProps) => (
       <DockThreadHeaderActions
         {...props}
         worktree={activeWorktree}
+        referenceThreadId={referenceThreadId}
         onCreateThread={handleCreateThread}
       />
     ),
-    [activeWorktree, handleCreateThread],
+    [activeWorktree, handleCreateThread, referenceThreadId],
   );
 
   const rightHeaderActionsComponent = useCallback(
@@ -1046,6 +1193,7 @@ export default function WorktreeChatWorkspace({
       <DockThreadHistoryAction
         {...props}
         projectName={activeProject?.name ?? null}
+        referenceThreadId={referenceThreadId}
         worktree={activeWorktree}
         worktreeSubtitle={worktreeSubtitle}
         unopenedThreads={unopenedThreads}
@@ -1058,6 +1206,7 @@ export default function WorktreeChatWorkspace({
       activeWorktree,
       handleCreateThread,
       openThreadInGroup,
+      referenceThreadId,
       unopenedThreads,
       worktreeSubtitle,
     ],
@@ -1084,14 +1233,27 @@ export default function WorktreeChatWorkspace({
     () => ({
       [DOCKVIEW_THREAD_COMPONENT]: (props: IDockviewPanelProps<WorktreeDockPanelParams>) => (
         <DockThreadPanel
-          {...props}
+          {...(props as IDockviewPanelProps<WorktreeDockThreadPanelParams>)}
           focusThreadId={focusedDockThreadId}
           onActivateThread={activateFocusedThread}
           routeThreadId={threadId}
         />
       ),
+      [DOCKVIEW_FILE_COMPONENT]: (props: IDockviewPanelProps<WorktreeDockPanelParams>) => (
+        <WorkspaceFilePanel
+          {...(props as IDockviewPanelProps<WorktreeDockFilePanelParams>)}
+          cwd={gitCwd}
+        />
+      ),
+      [DOCKVIEW_DIFF_COMPONENT]: (props: IDockviewPanelProps<WorktreeDockPanelParams>) => (
+        <WorkspaceDiffPanel
+          {...(props as IDockviewPanelProps<WorktreeDockDiffPanelParams>)}
+          cwd={gitCwd}
+          onOpenFile={(relativePath) => openWorkspaceFile(relativePath, "file")}
+        />
+      ),
     }),
-    [activateFocusedThread, focusedDockThreadId, threadId],
+    [activateFocusedThread, focusedDockThreadId, gitCwd, openWorkspaceFile, threadId],
   );
 
   useEffect(() => {
@@ -1135,23 +1297,28 @@ export default function WorktreeChatWorkspace({
 
     const panels = [...dockviewApi.panels];
     for (const panel of panels) {
-      const nextEntry = workspaceThreadsById.get(panel.id as ThreadId);
+      const currentParams = panel.api.getParameters<WorktreeDockPanelParams>();
+      if (!isThreadPanelParams(currentParams)) {
+        continue;
+      }
+      const nextEntry = workspaceThreadsById.get(currentParams.threadId);
       if (!nextEntry) {
         panel.api.close();
         continue;
       }
+      const currentThreadParams = currentParams as WorktreeDockThreadPanelParams;
 
       if (panel.title !== nextEntry.title) {
         panel.api.setTitle(nextEntry.title);
       }
 
-      const currentParams = panel.api.getParameters<WorktreeDockPanelParams>();
+      const nextParams = buildThreadPanelParams(nextEntry);
       if (
-        currentParams.threadId !== nextEntry.threadId ||
-        currentParams.worktreeId !== nextEntry.worktreeId ||
-        currentParams.title !== nextEntry.title
+        currentThreadParams.threadId !== nextParams.threadId ||
+        currentThreadParams.worktreeId !== nextParams.worktreeId ||
+        currentThreadParams.title !== nextParams.title
       ) {
-        panel.api.updateParameters(buildThreadPanelParams(nextEntry));
+        panel.api.updateParameters(nextParams);
       }
     }
 
@@ -1159,15 +1326,25 @@ export default function WorktreeChatWorkspace({
       return;
     }
 
-    const nextPanel = dockviewApi.activePanel ?? dockviewApi.panels[0];
+    const nextPanel =
+      dockviewApi.panels.find((panel) =>
+        isThreadPanelParams(panel.api.getParameters<WorktreeDockPanelParams>()),
+      ) ?? null;
     if (!nextPanel) {
       void navigate({ to: "/", replace: true });
       return;
     }
 
+    const nextThreadId = threadIdFromPanelParams(
+      nextPanel.api.getParameters<WorktreeDockPanelParams>(),
+    );
+    if (!nextThreadId) {
+      return;
+    }
+
     void navigate({
       to: "/$threadId",
-      params: { threadId: nextPanel.id as ThreadId },
+      params: { threadId: nextThreadId },
       replace: true,
     });
   }, [dockviewApi, navigate, threadId, workspaceThreadsById]);
@@ -1175,7 +1352,11 @@ export default function WorktreeChatWorkspace({
   useEffect(() => {
     if (!dockviewApi) return;
 
-    const syncFocusedThread = (nextThreadId: ThreadId | null | undefined, syncRoute: boolean) => {
+    const syncFocusedThread = (
+      nextParams: WorktreeDockPanelParams | null | undefined,
+      syncRoute: boolean,
+    ) => {
+      const nextThreadId = nextParams ? threadIdFromPanelParams(nextParams) : null;
       if (!nextThreadId) {
         return;
       }
@@ -1184,9 +1365,9 @@ export default function WorktreeChatWorkspace({
     };
 
     syncFocusedThread(
-      (dockviewApi.activeGroup?.activePanel?.id ??
-        dockviewApi.activePanel?.id ??
-        null) as ThreadId | null,
+      dockviewApi.activeGroup?.activePanel?.api.getParameters<WorktreeDockPanelParams>() ??
+        dockviewApi.activePanel?.api.getParameters<WorktreeDockPanelParams>() ??
+        null,
       false,
     );
 
@@ -1194,10 +1375,13 @@ export default function WorktreeChatWorkspace({
       setLayout(worktreeId, dockviewApi.toJSON());
     });
     const activePanelDisposable = dockviewApi.onDidActivePanelChange((panel) => {
-      syncFocusedThread((panel?.id ?? null) as ThreadId | null, true);
+      syncFocusedThread(panel?.api.getParameters<WorktreeDockPanelParams>() ?? null, true);
     });
     const activeGroupDisposable = dockviewApi.onDidActiveGroupChange((group) => {
-      syncFocusedThread((group?.activePanel?.id ?? null) as ThreadId | null, true);
+      syncFocusedThread(
+        group?.activePanel?.api.getParameters<WorktreeDockPanelParams>() ?? null,
+        true,
+      );
     });
 
     return () => {
@@ -1395,7 +1579,7 @@ export default function WorktreeChatWorkspace({
                   className="h-full w-full"
                   components={dockComponents}
                   defaultRenderer="always"
-                  defaultTabComponent={DockThreadTab}
+                  defaultTabComponent={DockWorkspaceTab}
                   disableFloatingGroups
                   leftHeaderActionsComponent={leftHeaderActionsComponent}
                   rightHeaderActionsComponent={rightHeaderActionsComponent}
@@ -1459,6 +1643,8 @@ export default function WorktreeChatWorkspace({
                   focusedThreadIsServer={focusedThread?.isServerThread ?? false}
                   railState={rightRailState}
                   setRailState={setRightRailState}
+                  onOpenFile={(relativePath) => openWorkspaceFile(relativePath, "file")}
+                  onOpenDiff={(relativePath) => openWorkspaceFile(relativePath, "diff")}
                   onClose={() => setRightRailState({ open: false })}
                 />
               </div>
@@ -1492,6 +1678,8 @@ export default function WorktreeChatWorkspace({
                 focusedThreadIsServer={focusedThread?.isServerThread ?? false}
                 railState={rightRailState}
                 setRailState={setRightRailState}
+                onOpenFile={(relativePath) => openWorkspaceFile(relativePath, "file")}
+                onOpenDiff={(relativePath) => openWorkspaceFile(relativePath, "diff")}
                 onClose={() => setRightRailState({ open: false })}
               />
             </div>

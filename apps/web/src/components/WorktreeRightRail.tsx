@@ -76,6 +76,8 @@ interface WorktreeRightRailProps {
       | Partial<WorktreeRightRailState>
       | ((current: WorktreeRightRailState) => Partial<WorktreeRightRailState>),
   ) => void;
+  onOpenFile: (relativePath: string) => void;
+  onOpenDiff: (relativePath: string) => void;
   onClose: () => void;
 }
 
@@ -155,6 +157,7 @@ function ExplorerList(props: {
   theme: "light" | "dark";
   viewMode: "tree" | "list";
   onToggleDirectory: (path: string) => void;
+  onOpenFile: (path: string) => void;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
   const rowVirtualizer = useVirtualizer({
@@ -212,14 +215,16 @@ function ExplorerList(props: {
               {rowContent}
             </button>
           ) : (
-            <div
+            <button
               key={row.path}
+              type="button"
               data-index={virtualRow.index}
-              className="absolute left-0 top-0 w-full"
+              className="absolute left-0 top-0 w-full text-left"
               style={{ transform: `translateY(${virtualRow.start}px)` }}
+              onClick={() => props.onOpenFile(row.path)}
             >
               {rowContent}
-            </div>
+            </button>
           );
         })}
       </div>
@@ -293,6 +298,8 @@ export default function WorktreeRightRail({
   focusedThreadIsServer,
   railState,
   setRailState,
+  onOpenFile,
+  onOpenDiff,
   onClose,
 }: WorktreeRightRailProps) {
   const { resolvedTheme } = useTheme();
@@ -708,6 +715,7 @@ export default function WorktreeRightRail({
             theme={theme}
             viewMode={railState.allFilesViewMode}
             onToggleDirectory={(path) => onToggleDirectory("all-files", path)}
+            onOpenFile={onOpenFile}
           />
         ) : (
           <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-muted-foreground">
@@ -731,6 +739,7 @@ export default function WorktreeRightRail({
             theme={theme}
             viewMode={railState.changesViewMode}
             onToggleDirectory={(path) => onToggleDirectory("changes", path)}
+            onOpenFile={onOpenDiff}
           />
         ) : (
           <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-muted-foreground">

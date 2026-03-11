@@ -824,6 +824,12 @@ export const makeGitManager = Effect.gen(function* () {
     };
   });
 
+  const readWorkingTreeFileDiff: GitManagerShape["readWorkingTreeFileDiff"] = Effect.fnUntraced(
+    function* (input) {
+      return yield* gitCore.readWorkingTreeFileDiff(input);
+    },
+  );
+
   const resolvePullRequest: GitManagerShape["resolvePullRequest"] = Effect.fnUntraced(
     function* (input) {
       const pullRequest = yield* gitHubCli
@@ -1086,6 +1092,7 @@ export const makeGitManager = Effect.gen(function* () {
 
   return {
     status,
+    readWorkingTreeFileDiff,
     resolvePullRequest,
     preparePullRequestThread,
     updatePullRequest,

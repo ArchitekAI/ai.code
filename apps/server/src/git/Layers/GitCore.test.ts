@@ -97,6 +97,7 @@ const makeIsolatedGitCore = (gitService: GitServiceShape) =>
     return {
       status: (input) => core.status(input),
       statusDetails: (cwd) => core.statusDetails(cwd),
+      readWorkingTreeFileDiff: (input) => core.readWorkingTreeFileDiff(input),
       prepareCommitContext: (cwd) => core.prepareCommitContext(cwd),
       commit: (cwd, subject, body) => core.commit(cwd, subject, body),
       pushCurrentBranch: (cwd, fallbackBranch) => core.pushCurrentBranch(cwd, fallbackBranch),
@@ -1924,6 +1925,47 @@ it.layer(TestLayer)("git integration", (it) => {
         expect(result.branches.every((branch) => !branch.isRemote)).toBe(true);
         expect(didFailRemoteBranches).toBe(true);
         expect(didFailRemoteNames).toBe(true);
+      }),
+    );
+  });
+
+  describe("readWorkingTreeFileDiff", () => {
+    it.effect("reads modified text diffs against HEAD", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "README.md"), "# changed\n");
+
+        const core = yield* GitCore;
+        const result = yield* core.readWorkingTreeFileDiff({
+          cwd: tmp,
+          relativePath: "README.md",
+        });
+
+        expect(result.changeKind).toBe("modified");
+        expect(result.previousPath).toBeNull();
+        expect(result.isBinary).toBe(false);
+        expect(result.tooLarge).toBe(false);
+        expect(result.originalContents).toContain("# test");
+        expect(result.modifiedContents).toContain("# changed");
+      }),
+    );
+
+    it.effect("reads untracked text files as working tree additions", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "notes.md"), "draft\n");
+
+        const core = yield* GitCore;
+        const result = yield* core.readWorkingTreeFileDiff({
+          cwd: tmp,
+          relativePath: "notes.md",
+        });
+
+        expect(result.changeKind).toBe("untracked");
+        expect(result.originalContents).toBeNull();
+        expect(result.modifiedContents).toBe("draft\n");
       }),
     );
   });

@@ -323,6 +323,55 @@ describe("wsNativeApi", () => {
     });
   });
 
+  it("forwards workspace file reads to the websocket project method", async () => {
+    requestMock.mockResolvedValue({
+      kind: "text",
+      relativePath: "plan.md",
+      sizeBytes: 7,
+      isBinary: false,
+      tooLarge: false,
+      contents: "# Plan\n",
+      sha256: "a".repeat(64),
+    });
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+    await api.projects.readFile({
+      cwd: "/tmp/project",
+      relativePath: "plan.md",
+    });
+
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.projectsReadFile, {
+      cwd: "/tmp/project",
+      relativePath: "plan.md",
+    });
+  });
+
+  it("forwards working tree file diff requests to the websocket git method", async () => {
+    requestMock.mockResolvedValue({
+      relativePath: "src/app.ts",
+      previousPath: null,
+      changeKind: "modified",
+      unifiedDiff: "diff --git a/src/app.ts b/src/app.ts",
+      isBinary: false,
+      tooLarge: false,
+      originalContents: "before\n",
+      modifiedContents: "after\n",
+    });
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+    await api.git.readWorkingTreeFileDiff({
+      cwd: "/tmp/project",
+      relativePath: "src/app.ts",
+    });
+
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.gitReadWorkingTreeFileDiff, {
+      cwd: "/tmp/project",
+      relativePath: "src/app.ts",
+    });
+  });
+
   it("forwards full-thread diff requests to the orchestration websocket method", async () => {
     requestMock.mockResolvedValue({ diff: "patch" });
     const { createWsNativeApi } = await import("./wsNativeApi");

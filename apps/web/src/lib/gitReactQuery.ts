@@ -11,6 +11,8 @@ export const gitQueryKeys = {
   all: ["git"] as const,
   status: (cwd: string | null) => ["git", "status", cwd] as const,
   branches: (cwd: string | null) => ["git", "branches", cwd] as const,
+  workingTreeFileDiff: (cwd: string | null, relativePath: string | null) =>
+    ["git", "working-tree-file-diff", cwd, relativePath] as const,
 };
 
 export const gitMutationKeys = {
@@ -58,6 +60,31 @@ export function gitBranchesQueryOptions(cwd: string | null) {
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
     refetchInterval: GIT_BRANCHES_REFETCH_INTERVAL_MS,
+  });
+}
+
+export function gitWorkingTreeFileDiffQueryOptions(input: {
+  cwd: string | null;
+  relativePath: string | null;
+  enabled?: boolean;
+  staleTime?: number;
+}) {
+  return queryOptions({
+    queryKey: gitQueryKeys.workingTreeFileDiff(input.cwd, input.relativePath),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      if (!input.cwd || !input.relativePath) {
+        throw new Error("Git diff is unavailable.");
+      }
+      return api.git.readWorkingTreeFileDiff({
+        cwd: input.cwd,
+        relativePath: input.relativePath,
+      });
+    },
+    enabled: (input.enabled ?? true) && input.cwd !== null && input.relativePath !== null,
+    staleTime: input.staleTime ?? GIT_STATUS_STALE_TIME_MS,
+    refetchOnWindowFocus: "always",
+    refetchOnReconnect: "always",
   });
 }
 

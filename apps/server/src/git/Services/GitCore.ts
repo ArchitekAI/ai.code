@@ -17,6 +17,8 @@ import type {
   GitListBranchesInput,
   GitListBranchesResult,
   GitPullResult,
+  GitReadWorkingTreeFileDiffInput,
+  GitReadWorkingTreeFileDiffResult,
   GitRemoveWorktreeInput,
   GitStatusInput,
   GitStatusResult,
@@ -102,6 +104,13 @@ export interface GitCoreShape {
   readonly prepareCommitContext: (
     cwd: string,
   ) => Effect.Effect<GitPreparedCommitContext | null, GitCommandError>;
+
+  /**
+   * Read a file-level diff between HEAD and the working tree.
+   */
+  readonly readWorkingTreeFileDiff: (
+    input: GitReadWorkingTreeFileDiffInput,
+  ) => Effect.Effect<GitReadWorkingTreeFileDiffResult, GitCommandError>;
 
   /**
    * Create a commit with provided subject/body.

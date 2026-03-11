@@ -6,6 +6,8 @@ import type {
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
   GitPullRequestRefInput,
+  GitReadWorkingTreeFileDiffInput,
+  GitReadWorkingTreeFileDiffResult,
   GitCreateWorktreeInput,
   GitCreateWorktreeResult,
   GitInitInput,
@@ -27,6 +29,8 @@ import type {
 import type {
   ProjectListEntriesInput,
   ProjectListEntriesResult,
+  ProjectReadFileInput,
+  ProjectReadFileResult,
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
   ProjectWriteFileInput,
@@ -147,6 +151,7 @@ export interface NativeApi {
   projects: {
     listEntries: (input: ProjectListEntriesInput) => Promise<ProjectListEntriesResult>;
     searchEntries: (input: ProjectSearchEntriesInput) => Promise<ProjectSearchEntriesResult>;
+    readFile: (input: ProjectReadFileInput) => Promise<ProjectReadFileResult>;
     writeFile: (input: ProjectWriteFileInput) => Promise<ProjectWriteFileResult>;
   };
   shell: {
@@ -171,6 +176,9 @@ export interface NativeApi {
     // Stacked action API
     pull: (input: GitPullInput) => Promise<GitPullResult>;
     status: (input: GitStatusInput) => Promise<GitStatusResult>;
+    readWorkingTreeFileDiff: (
+      input: GitReadWorkingTreeFileDiffInput,
+    ) => Promise<GitReadWorkingTreeFileDiffResult>;
     runStackedAction: (input: GitRunStackedActionInput) => Promise<GitRunStackedActionResult>;
   };
   worktreeChecks: {

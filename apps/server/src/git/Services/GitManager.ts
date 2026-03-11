@@ -10,6 +10,8 @@ import {
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
   GitPullRequestRefInput,
+  GitReadWorkingTreeFileDiffInput,
+  GitReadWorkingTreeFileDiffResult,
   GitResolvePullRequestResult,
   GitRunStackedActionInput,
   GitRunStackedActionResult,
@@ -32,6 +34,13 @@ export interface GitManagerShape {
   readonly status: (
     input: GitStatusInput,
   ) => Effect.Effect<GitStatusResult, GitManagerServiceError>;
+
+  /**
+   * Read a working tree diff for a single file.
+   */
+  readonly readWorkingTreeFileDiff: (
+    input: GitReadWorkingTreeFileDiffInput,
+  ) => Effect.Effect<GitReadWorkingTreeFileDiffResult, GitManagerServiceError>;
 
   /**
    * Resolve a pull request by URL/number against the current repository.
