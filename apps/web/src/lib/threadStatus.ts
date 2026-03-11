@@ -11,6 +11,8 @@ export type ThreadStatusKind =
   | "awaitingInput"
   | "working"
   | "connecting"
+  | "failed"
+  | "interrupted"
   | "planReady"
   | "completed";
 
@@ -21,6 +23,8 @@ export interface ThreadStatusVisual {
     | "Awaiting Input"
     | "Working"
     | "Connecting"
+    | "Failed"
+    | "Interrupted"
     | "Plan Ready"
     | "Completed";
   colorClass: string;
@@ -38,6 +42,8 @@ const THREAD_STATUS_PRIORITY: readonly ThreadStatusKind[] = [
   "awaitingInput",
   "working",
   "connecting",
+  "failed",
+  "interrupted",
   "planReady",
   "completed",
 ];
@@ -66,6 +72,18 @@ const THREAD_STATUS_VISUALS = {
     colorClass: "text-sky-600 dark:text-sky-300/80",
     dotClass: "bg-sky-500 dark:bg-sky-300/80",
     pulse: true,
+  },
+  failed: {
+    label: "Failed",
+    colorClass: "text-rose-600 dark:text-rose-300/90",
+    dotClass: "bg-rose-500 dark:bg-rose-300/90",
+    pulse: false,
+  },
+  interrupted: {
+    label: "Interrupted",
+    colorClass: "text-orange-600 dark:text-orange-300/90",
+    dotClass: "bg-orange-500 dark:bg-orange-300/90",
+    pulse: false,
   },
   planReady: {
     label: "Plan Ready",
@@ -111,6 +129,14 @@ export function resolveThreadStatusKind(thread: ThreadStatusSnapshot): ThreadSta
     return "connecting";
   }
 
+  if (thread.latestTurn?.state === "error") {
+    return "failed";
+  }
+
+  if (thread.latestTurn?.state === "interrupted") {
+    return "interrupted";
+  }
+
   const hasPlanReadyPrompt =
     thread.interactionMode === "plan" &&
     isLatestTurnSettled(thread.latestTurn, thread.session) &&
@@ -119,7 +145,7 @@ export function resolveThreadStatusKind(thread: ThreadStatusSnapshot): ThreadSta
     return "planReady";
   }
 
-  if (hasUnseenCompletion(thread)) {
+  if (thread.latestTurn?.state === "completed" && hasUnseenCompletion(thread)) {
     return "completed";
   }
 

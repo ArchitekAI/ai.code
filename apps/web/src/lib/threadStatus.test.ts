@@ -9,10 +9,14 @@ import {
   type ThreadStatusSnapshot,
 } from "./threadStatus";
 
-function makeLatestTurn(overrides?: { completedAt?: string | null; startedAt?: string | null }) {
+function makeLatestTurn(overrides?: {
+  completedAt?: string | null;
+  startedAt?: string | null;
+  state?: "running" | "interrupted" | "completed" | "error";
+}) {
   return {
     turnId: "turn-1" as never,
-    state: "completed" as const,
+    state: overrides?.state ?? ("completed" as const),
     assistantMessageId: null,
     requestedAt: "2026-03-09T10:00:00.000Z",
     startedAt: overrides?.startedAt ?? "2026-03-09T10:00:00.000Z",
@@ -163,6 +167,26 @@ describe("resolveThreadStatusKind", () => {
         }),
       ),
     ).toBe("completed");
+  });
+
+  it("returns failed for an errored latest turn", () => {
+    expect(
+      resolveThreadStatusKind(
+        makeThread({
+          latestTurn: makeLatestTurn({ state: "error" }),
+        }),
+      ),
+    ).toBe("failed");
+  });
+
+  it("returns interrupted for an interrupted latest turn", () => {
+    expect(
+      resolveThreadStatusKind(
+        makeThread({
+          latestTurn: makeLatestTurn({ state: "interrupted" }),
+        }),
+      ),
+    ).toBe("interrupted");
   });
 
   it("returns null", () => {
@@ -374,5 +398,19 @@ describe("resolveWorktreeStatusKind", () => {
 
   it("returns null for an empty worktree", () => {
     expect(resolveWorktreeStatusKind([])).toBeNull();
+  });
+
+  it("prioritizes failed over completed", () => {
+    expect(
+      resolveWorktreeStatusKind([
+        makeThread({
+          latestTurn: makeLatestTurn(),
+          lastVisitedAt: "2026-03-09T10:04:00.000Z",
+        }),
+        makeThread({
+          latestTurn: makeLatestTurn({ state: "error" }),
+        }),
+      ]),
+    ).toBe("failed");
   });
 });
