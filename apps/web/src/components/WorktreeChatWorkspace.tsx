@@ -59,7 +59,6 @@ import { worktreeDisplaySubtitle, worktreeDisplayTitle } from "../lib/worktrees"
 import { cn, newCommandId, randomUUID } from "../lib/utils";
 import { serverConfigQueryOptions, serverQueryKeys } from "../lib/serverReactQuery";
 import { readNativeApi } from "../nativeApi";
-import { getNewThreadShortcutHint } from "../newThreadShortcut";
 import {
   commandForProjectScript,
   nextProjectScriptId,
@@ -285,11 +284,9 @@ function DockThreadHeaderActions({
   Pick<DockThreadHeaderActionsExtraProps, "worktree" | "onCreateThread">) {
   const referencePanelId = (activePanel?.id ?? panels[0]?.id ?? null) as ThreadId | null;
   const worktreeTitle = worktree ? worktreeDisplayTitle(worktree) : "Threads";
-  const newThreadShortcut = getNewThreadShortcutHint();
-
   return (
     <div className="dockview-thread-actions flex items-center gap-0.5 pr-1">
-      <KbdTooltip label="New thread" shortcut={newThreadShortcut} side="bottom">
+      <KbdTooltip label="New thread" side="bottom">
         <Button
           aria-label={`Create a new thread in ${worktreeTitle}`}
           className="dockview-thread-action"

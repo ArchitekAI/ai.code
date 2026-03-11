@@ -44,7 +44,6 @@ import { useAppSettings } from "../appSettings";
 import { isElectron } from "../env";
 import { APP_STAGE_LABEL, APP_VERSION } from "../branding";
 import { isMacPlatform, newCommandId, newProjectId } from "../lib/utils";
-import { isNewThreadShortcut } from "../newThreadShortcut";
 import { useStore } from "../store";
 import { resolveShortcutCommand, shortcutKbdSequenceForCommand } from "../keybindings";
 import {
@@ -1474,19 +1473,6 @@ export default function Sidebar() {
         activeDraftThread?.envMode ??
         (activeWorktree?.isRoot === true || nextWorktreePath === null ? "local" : "worktree");
       const terminalFocused = isTerminalFocused();
-      if (isNewThreadShortcut(event)) {
-        if (terminalFocused) return;
-        if (!activeProjectId || !activeWorktreeId) return;
-        event.preventDefault();
-        void handleNewThread({
-          projectId: activeProjectId,
-          worktreeId: activeWorktreeId,
-          branch: nextBranch,
-          worktreePath: nextWorktreePath,
-          envMode: nextEnvMode,
-        });
-        return;
-      }
       const command = resolveShortcutCommand(event, keybindings, {
         context: {
           terminalFocus: terminalFocused,
