@@ -1653,7 +1653,7 @@ export default function Sidebar() {
             onDragEnd={handleProjectDragEnd}
             onDragCancel={handleProjectDragCancel}
           >
-            <SidebarMenu>
+            <SidebarMenu className="gap-2">
               <SortableContext
                 items={projects.map((project) => project.id)}
                 strategy={verticalListSortingStrategy}
@@ -1733,7 +1733,7 @@ export default function Sidebar() {
                           </div>
 
                           <CollapsibleContent keepMounted>
-                            <SidebarMenuSub className="my-0 mr-0 ml-[13px] w-[calc(100%-13px)] translate-x-0 gap-0.5 pr-0 pl-1.5 py-0">
+                            <SidebarMenuSub className="my-0 mr-0 ml-0 w-full translate-x-0 gap-0.5 border-l-0 pr-0 pl-1.5 py-0">
                               {projectWorktrees.map((worktree) => {
                                 const persistedWorktreeThreads = projectThreads.filter(
                                   (thread) => thread.worktreeId === worktree.id,
