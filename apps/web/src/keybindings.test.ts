@@ -100,8 +100,7 @@ const DEFAULT_BINDINGS = compile([
     command: "diff.toggle",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
-  { shortcut: modShortcut("o", { shiftKey: true }), command: "chat.new" },
-  { shortcut: modShortcut("n", { shiftKey: true }), command: "chat.newLocal" },
+  { shortcut: modShortcut("t"), command: "chat.new" },
   {
     shortcut: modShortcut("a", { shiftKey: true }),
     command: "worktree.archive",
@@ -253,7 +252,7 @@ describe("shortcutLabelForCommand", () => {
   });
 
   it("returns labels for non-terminal commands", () => {
-    assert.strictEqual(shortcutLabelForCommand(DEFAULT_BINDINGS, "chat.new", "MacIntel"), "⌘⇧O");
+    assert.strictEqual(shortcutLabelForCommand(DEFAULT_BINDINGS, "chat.new", "MacIntel"), "⌘T");
     assert.strictEqual(shortcutLabelForCommand(DEFAULT_BINDINGS, "diff.toggle", "Linux"), "Ctrl+D");
     assert.strictEqual(
       shortcutLabelForCommand(DEFAULT_BINDINGS, "worktree.archive", "MacIntel"),
@@ -277,25 +276,29 @@ describe("shortcutLabelForCommand", () => {
 describe("chat/editor shortcuts", () => {
   it("matches chat.new shortcut", () => {
     assert.isTrue(
-      isChatNewShortcut(event({ key: "o", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+      isChatNewShortcut(event({ key: "t", metaKey: true }), DEFAULT_BINDINGS, {
         platform: "MacIntel",
       }),
     );
     assert.isTrue(
-      isChatNewShortcut(event({ key: "o", ctrlKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+      isChatNewShortcut(event({ key: "t", ctrlKey: true }), DEFAULT_BINDINGS, {
         platform: "Linux",
       }),
     );
   });
 
-  it("matches chat.newLocal shortcut", () => {
+  it("matches chat.newLocal shortcut when configured", () => {
+    const keybindings = compile([
+      { shortcut: modShortcut("n", { shiftKey: true }), command: "chat.newLocal" },
+    ]);
+
     assert.isTrue(
-      isChatNewLocalShortcut(event({ key: "n", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+      isChatNewLocalShortcut(event({ key: "n", metaKey: true, shiftKey: true }), keybindings, {
         platform: "MacIntel",
       }),
     );
     assert.isTrue(
-      isChatNewLocalShortcut(event({ key: "n", ctrlKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+      isChatNewLocalShortcut(event({ key: "n", ctrlKey: true, shiftKey: true }), keybindings, {
         platform: "Linux",
       }),
     );
