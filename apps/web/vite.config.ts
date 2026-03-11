@@ -1,5 +1,6 @@
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
+import { getAppDisplayName } from "@repo/shared/branding";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import { defineConfig } from "vite";
 import { version } from "./package.json" with { type: "json" };
@@ -22,6 +23,12 @@ export default defineConfig({
         plugins: [["babel-plugin-react-compiler", { target: "19" }]],
       },
     }),
+    {
+      name: "app-branding-html",
+      transformIndexHtml(html) {
+        return html.replace(/%APP_DISPLAY_NAME%/g, getAppDisplayName(false));
+      },
+    },
     tailwindcss(),
   ],
   optimizeDeps: {

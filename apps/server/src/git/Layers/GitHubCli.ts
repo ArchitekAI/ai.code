@@ -7,6 +7,7 @@ import {
   GitHubCli,
   type GitHubRepositoryCloneUrls,
   type GitHubCliShape,
+  type GitHubPullRequestDetails,
   type GitHubPullRequestSummary,
 } from "../Services/GitHubCli.ts";
 
@@ -103,6 +104,18 @@ const RawGitHubPullRequestSchema = Schema.Struct({
   ),
 });
 
+const RawGitHubPullRequestDetailsSchema = Schema.Struct({
+  ...RawGitHubPullRequestSchema.fields,
+  body: Schema.optional(Schema.String),
+  reviewDecision: Schema.optional(Schema.NullOr(Schema.String)),
+  isDraft: Schema.optional(Schema.Boolean),
+  headRefOid: Schema.optional(Schema.NullOr(Schema.String)),
+  updatedAt: Schema.optional(Schema.NullOr(Schema.String)),
+  statusCheckRollup: Schema.optional(Schema.Unknown),
+  comments: Schema.optional(Schema.Unknown),
+  reviews: Schema.optional(Schema.Unknown),
+});
+
 const RawGitHubRepositoryCloneUrlsSchema = Schema.Struct({
   nameWithOwner: TrimmedNonEmptyString,
   url: TrimmedNonEmptyString,
@@ -133,6 +146,30 @@ function normalizePullRequestSummary(
   };
 }
 
+function normalizePullRequestDetails(
+  raw: Schema.Schema.Type<typeof RawGitHubPullRequestDetailsSchema>,
+): GitHubPullRequestDetails {
+  const summary = normalizePullRequestSummary(raw);
+  return {
+    ...summary,
+    body: raw.body ?? "",
+    reviewDecision:
+      typeof raw.reviewDecision === "string" && raw.reviewDecision.trim().length > 0
+        ? raw.reviewDecision
+        : null,
+    isDraft: raw.isDraft === true,
+    headRefOid:
+      typeof raw.headRefOid === "string" && raw.headRefOid.trim().length > 0
+        ? raw.headRefOid
+        : null,
+    updatedAt:
+      typeof raw.updatedAt === "string" && raw.updatedAt.trim().length > 0 ? raw.updatedAt : null,
+    ...(raw.statusCheckRollup !== undefined ? { statusCheckRollup: raw.statusCheckRollup } : {}),
+    ...(raw.comments !== undefined ? { comments: raw.comments } : {}),
+    ...(raw.reviews !== undefined ? { reviews: raw.reviews } : {}),
+  };
+}
+
 function normalizeRepositoryCloneUrls(
   raw: Schema.Schema.Type<typeof RawGitHubRepositoryCloneUrlsSchema>,
 ): GitHubRepositoryCloneUrls {
@@ -146,7 +183,11 @@ function normalizeRepositoryCloneUrls(
 function decodeGitHubJson<S extends Schema.Top>(
   raw: string,
   schema: S,
-  operation: "listOpenPullRequests" | "getPullRequest" | "getRepositoryCloneUrls",
+  operation:
+    | "listOpenPullRequests"
+    | "getPullRequest"
+    | "getPullRequestDetails"
+    | "getRepositoryCloneUrls",
   invalidDetail: string,
 ): Effect.Effect<S["Type"], GitHubCliError, S["DecodingServices"]> {
   return Schema.decodeEffect(Schema.fromJsonString(schema))(raw).pipe(
@@ -225,6 +266,28 @@ const makeGitHubCli = Effect.sync(() => {
         ),
         Effect.map(normalizePullRequestSummary),
       ),
+    getPullRequestDetails: (input) =>
+      execute({
+        cwd: input.cwd,
+        args: [
+          "pr",
+          "view",
+          input.reference,
+          "--json",
+          "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner,body,reviewDecision,isDraft,headRefOid,updatedAt,statusCheckRollup,comments,reviews",
+        ],
+      }).pipe(
+        Effect.map((result) => result.stdout.trim()),
+        Effect.flatMap((raw) =>
+          decodeGitHubJson(
+            raw,
+            RawGitHubPullRequestDetailsSchema,
+            "getPullRequestDetails",
+            "GitHub CLI returned invalid pull request details JSON.",
+          ),
+        ),
+        Effect.map(normalizePullRequestDetails),
+      ),
     getRepositoryCloneUrls: (input) =>
       execute({
         cwd: input.cwd,
@@ -271,6 +334,11 @@ const makeGitHubCli = Effect.sync(() => {
       execute({
         cwd: input.cwd,
         args: ["pr", "checkout", input.reference, ...(input.force ? ["--force"] : [])],
+      }).pipe(Effect.asVoid),
+    updatePullRequest: (input) =>
+      execute({
+        cwd: input.cwd,
+        args: ["pr", "edit", input.reference, "--title", input.title, "--body", input.body],
       }).pipe(Effect.asVoid),
   } satisfies GitHubCliShape;
 

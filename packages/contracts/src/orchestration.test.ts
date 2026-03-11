@@ -6,6 +6,7 @@ import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
   OrchestrationGetTurnDiffInput,
+  ProjectCreatedPayload,
   OrchestrationSession,
   ProjectCreateCommand,
   ThreadTurnStartCommand,
@@ -17,6 +18,7 @@ import {
 const decodeTurnDiffInput = Schema.decodeUnknownEffect(OrchestrationGetTurnDiffInput);
 const decodeThreadTurnDiff = Schema.decodeUnknownEffect(ThreadTurnDiff);
 const decodeProjectCreateCommand = Schema.decodeUnknownEffect(ProjectCreateCommand);
+const decodeProjectCreatedPayload = Schema.decodeUnknownEffect(ProjectCreatedPayload);
 const decodeThreadTurnStartCommand = Schema.decodeUnknownEffect(ThreadTurnStartCommand);
 const decodeThreadTurnStartRequestedPayload = Schema.decodeUnknownEffect(
   ThreadTurnStartRequestedPayload,
@@ -95,6 +97,22 @@ it.effect("rejects command fields that become empty after trim", () =>
       }),
     );
     assert.strictEqual(result._tag, "Failure");
+  }),
+);
+
+it.effect("decodes project.created repo settings defaults", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeProjectCreatedPayload({
+      projectId: "project-1",
+      title: "Project Title",
+      workspaceRoot: "/tmp/workspace",
+      defaultModel: null,
+      scripts: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(parsed.defaultWorktreeBaseBranch, null);
+    assert.strictEqual(parsed.defaultPullRequestBaseBranch, null);
   }),
 );
 

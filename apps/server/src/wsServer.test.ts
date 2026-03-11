@@ -1677,6 +1677,7 @@ describe("WebSocket Server", () => {
     const statusResult = {
       branch: "feature/test",
       hasWorkingTreeChanges: true,
+      hasMergeConflicts: false,
       workingTree: {
         files: [{ path: "src/index.ts", insertions: 7, deletions: 2 }],
         insertions: 7,
@@ -1697,6 +1698,7 @@ describe("WebSocket Server", () => {
       resolvePullRequest,
       preparePullRequestThread,
       runStackedAction,
+      updatePullRequest: vi.fn(() => Effect.void as any),
     };
 
     server = await createTestServer({ cwd: "/test", gitManager });
@@ -1736,6 +1738,7 @@ describe("WebSocket Server", () => {
       resolvePullRequest: vi.fn(() => Effect.succeed(resolvePullRequestResult)),
       preparePullRequestThread: vi.fn(() => Effect.succeed(preparePullRequestThreadResult)),
       runStackedAction: vi.fn(() => Effect.void as any),
+      updatePullRequest: vi.fn(() => Effect.void as any),
     };
 
     server = await createTestServer({ cwd: "/test", gitManager });
@@ -1784,6 +1787,7 @@ describe("WebSocket Server", () => {
       resolvePullRequest: vi.fn(() => Effect.void as any),
       preparePullRequestThread: vi.fn(() => Effect.void as any),
       runStackedAction,
+      updatePullRequest: vi.fn(() => Effect.void as any),
     };
 
     server = await createTestServer({ cwd: "/test", gitManager });

@@ -28,6 +28,10 @@
       "types": "./src/Net.ts",
       "import": "./src/Net.ts"
     },
+    "./branding": {
+      "types": "./src/branding.ts",
+      "import": "./src/branding.ts"
+    },
     "./DrainableWorker": {
       "types": "./src/DrainableWorker.ts",
       "import": "./src/DrainableWorker.ts"

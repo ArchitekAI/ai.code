@@ -46,6 +46,7 @@ import { readNativeApi } from "~/nativeApi";
 interface GitActionsControlProps {
   gitCwd: string | null;
   activeThreadId: ThreadId | null;
+  defaultPullRequestBaseBranch: string | null;
 }
 
 interface PendingDefaultBranchAction {
@@ -150,7 +151,11 @@ function GitQuickActionIcon({ quickAction }: { quickAction: GitQuickAction }) {
   return <InfoIcon className={iconClassName} />;
 }
 
-export default function GitActionsControl({ gitCwd, activeThreadId }: GitActionsControlProps) {
+export default function GitActionsControl({
+  gitCwd,
+  activeThreadId,
+  defaultPullRequestBaseBranch,
+}: GitActionsControlProps) {
   const threadToastData = useMemo(
     () => (activeThreadId ? { threadId: activeThreadId } : undefined),
     [activeThreadId],
@@ -181,7 +186,11 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
   const initMutation = useMutation(gitInitMutationOptions({ cwd: gitCwd, queryClient }));
 
   const runImmediateGitActionMutation = useMutation(
-    gitRunStackedActionMutationOptions({ cwd: gitCwd, queryClient }),
+    gitRunStackedActionMutationOptions({
+      cwd: gitCwd,
+      queryClient,
+      defaultPullRequestBaseBranch,
+    }),
   );
   const pullMutation = useMutation(gitPullMutationOptions({ cwd: gitCwd, queryClient }));
 

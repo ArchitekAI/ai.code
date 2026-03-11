@@ -51,7 +51,7 @@ import { GitManager } from "./git/Services/GitManager.ts";
 import { WorktreeArchiveService } from "./git/Services/WorktreeArchive.ts";
 import { TerminalManager } from "./terminal/Services/Manager.ts";
 import { Keybindings } from "./keybindings";
-import { searchWorkspaceEntries } from "./workspaceEntries";
+import { listWorkspaceEntries, searchWorkspaceEntries } from "./workspaceEntries";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor";
@@ -81,6 +81,7 @@ import { makeServerPushBus } from "./wsServer/pushBus.ts";
 import { makeServerReadiness } from "./wsServer/readiness.ts";
 import { decodeJsonResult, formatSchemaError } from "@repo/shared/schemaJson";
 import { rootWorktreeIdForProject } from "./orchestration/worktrees.ts";
+import { WorktreeChecks } from "./worktreeChecks/Services/WorktreeChecks.ts";
 
 /**
  * ServerShape - Service API for server lifecycle control.
@@ -217,6 +218,7 @@ export type ServerRuntimeServices =
   | ServerCoreRuntimeServices
   | GitManager
   | WorktreeArchiveService
+  | WorktreeChecks
   | GitCore
   | TerminalManager
   | Keybindings
@@ -757,6 +759,17 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         });
       }
 
+      case WS_METHODS.projectsListEntries: {
+        const body = stripRequestTag(request.body);
+        return yield* Effect.tryPromise({
+          try: () => listWorkspaceEntries(body),
+          catch: (cause) =>
+            new RouteRequestError({
+              message: `Failed to list workspace entries: ${String(cause)}`,
+            }),
+        });
+      }
+
       case WS_METHODS.projectsWriteFile: {
         const body = stripRequestTag(request.body);
         const target = yield* resolveWorkspaceWritePath({
@@ -813,6 +826,35 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       case WS_METHODS.gitPreparePullRequestThread: {
         const body = stripRequestTag(request.body);
         return yield* gitManager.preparePullRequestThread(body);
+      }
+
+      case WS_METHODS.gitUpdatePullRequest: {
+        const body = stripRequestTag(request.body);
+        return yield* gitManager.updatePullRequest(body);
+      }
+
+      case WS_METHODS.worktreeChecksGet: {
+        const body = stripRequestTag(request.body);
+        const worktreeChecks = yield* WorktreeChecks;
+        return yield* worktreeChecks.get(body);
+      }
+
+      case WS_METHODS.worktreeChecksAddTodo: {
+        const body = stripRequestTag(request.body);
+        const worktreeChecks = yield* WorktreeChecks;
+        return yield* worktreeChecks.addTodo(body);
+      }
+
+      case WS_METHODS.worktreeChecksUpdateTodo: {
+        const body = stripRequestTag(request.body);
+        const worktreeChecks = yield* WorktreeChecks;
+        return yield* worktreeChecks.updateTodo(body);
+      }
+
+      case WS_METHODS.worktreeChecksDeleteTodo: {
+        const body = stripRequestTag(request.body);
+        const worktreeChecks = yield* WorktreeChecks;
+        return yield* worktreeChecks.deleteTodo(body);
       }
 
       case WS_METHODS.gitListBranches: {

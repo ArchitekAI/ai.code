@@ -25,6 +25,7 @@ import {
 } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionThreadRepository } from "../../persistence/Services/ProjectionThreads.ts";
 import { WorktreeArchiveMetadataRepository } from "../../persistence/Services/WorktreeArchiveMetadata.ts";
+import { WorktreeCheckTodoRepository } from "../../persistence/Services/WorktreeCheckTodos.ts";
 import { ProjectionWorktreeRepository } from "../../persistence/Services/ProjectionWorktrees.ts";
 import { ProjectionPendingApprovalRepositoryLive } from "../../persistence/Layers/ProjectionPendingApprovals.ts";
 import { ProjectionProjectRepositoryLive } from "../../persistence/Layers/ProjectionProjects.ts";
@@ -36,6 +37,7 @@ import { ProjectionThreadSessionRepositoryLive } from "../../persistence/Layers/
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { ProjectionThreadRepositoryLive } from "../../persistence/Layers/ProjectionThreads.ts";
 import { WorktreeArchiveMetadataRepositoryLive } from "../../persistence/Layers/WorktreeArchiveMetadata.ts";
+import { WorktreeCheckTodoRepositoryLive } from "../../persistence/Layers/WorktreeCheckTodos.ts";
 import { ProjectionWorktreeRepositoryLive } from "../../persistence/Layers/ProjectionWorktrees.ts";
 import { ServerConfig } from "../../config.ts";
 import {
@@ -353,6 +355,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const projectionPendingApprovalRepository = yield* ProjectionPendingApprovalRepository;
   const worktreeArchiveMetadataRepository = yield* WorktreeArchiveMetadataRepository;
+  const worktreeCheckTodoRepository = yield* WorktreeCheckTodoRepository;
 
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -367,6 +370,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             title: event.payload.title,
             workspaceRoot: event.payload.workspaceRoot,
             defaultModel: event.payload.defaultModel,
+            defaultWorktreeBaseBranch: event.payload.defaultWorktreeBaseBranch,
+            defaultPullRequestBaseBranch: event.payload.defaultPullRequestBaseBranch,
             scripts: event.payload.scripts,
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
@@ -390,6 +395,12 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             ...(event.payload.defaultModel !== undefined
               ? { defaultModel: event.payload.defaultModel }
               : {}),
+            ...(event.payload.defaultWorktreeBaseBranch !== undefined
+              ? { defaultWorktreeBaseBranch: event.payload.defaultWorktreeBaseBranch }
+              : {}),
+            ...(event.payload.defaultPullRequestBaseBranch !== undefined
+              ? { defaultPullRequestBaseBranch: event.payload.defaultPullRequestBaseBranch }
+              : {}),
             ...(event.payload.scripts !== undefined ? { scripts: event.payload.scripts } : {}),
             updatedAt: event.payload.updatedAt,
           });
@@ -398,6 +409,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
 
         case "project.deleted": {
           yield* worktreeArchiveMetadataRepository.deleteByProjectId({
+            projectId: event.payload.projectId,
+          });
+          yield* worktreeCheckTodoRepository.deleteByProjectId({
             projectId: event.payload.projectId,
           });
           const existingRow = yield* projectionProjectRepository.getById({
@@ -490,6 +504,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
 
         case "worktree.deleted": {
           yield* worktreeArchiveMetadataRepository.deleteById({
+            worktreeId: event.payload.worktreeId,
+          });
+          yield* worktreeCheckTodoRepository.deleteByWorktreeId({
             worktreeId: event.payload.worktreeId,
           });
           const existingRow = yield* projectionWorktreeRepository.getById({
@@ -1388,4 +1405,5 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
   Layer.provideMerge(ProjectionPendingApprovalRepositoryLive),
   Layer.provideMerge(ProjectionStateRepositoryLive),
   Layer.provideMerge(WorktreeArchiveMetadataRepositoryLive),
+  Layer.provideMerge(WorktreeCheckTodoRepositoryLive),
 );

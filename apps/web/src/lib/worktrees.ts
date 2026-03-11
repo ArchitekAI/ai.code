@@ -1,4 +1,4 @@
-import type { NativeApi, ProjectId, WorktreeId } from "@repo/contracts";
+import type { GitBranch, NativeApi, ProjectId, WorktreeId } from "@repo/contracts";
 import type { Project, Worktree } from "~/types";
 import { buildPrefixedBranchName } from "@repo/shared/git";
 import { rootWorktreeIdForProject } from "@repo/shared/worktrees";
@@ -167,6 +167,24 @@ export function createManagedWorktreeSeed(input: {
     slug,
     branch: buildManagedWorktreeBranchName(input.branchPrefix, slug),
   };
+}
+
+export function resolveProjectWorktreeBaseBranch(input: {
+  readonly configuredBaseBranch: string | null;
+  readonly fallbackBranch: string | null;
+}): string | null {
+  return input.configuredBaseBranch ?? input.fallbackBranch;
+}
+
+export function hasGitBranch(
+  branches: readonly Pick<GitBranch, "name">[],
+  branchName: string | null,
+): boolean {
+  if (!branchName) {
+    return false;
+  }
+
+  return branches.some((branch) => branch.name === branchName);
 }
 
 export function findRootWorktree(

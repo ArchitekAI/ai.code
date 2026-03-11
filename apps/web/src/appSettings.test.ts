@@ -5,7 +5,15 @@ import {
   getSlashModelOptions,
   normalizeCustomModelSlugs,
   resolveAppModelSelection,
+  getAppSettingsSnapshot,
+  useAppSettings,
 } from "./appSettings";
+
+describe("app name settings", () => {
+  it("defaults the custom app name to empty", () => {
+    expect(getAppSettingsSnapshot().customAppName).toBe("");
+  });
+});
 
 describe("normalizeCustomModelSlugs", () => {
   it("normalizes aliases, removes built-ins, and deduplicates values", () => {

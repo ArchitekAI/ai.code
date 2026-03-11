@@ -115,6 +115,7 @@ export function gitCheckoutMutationOptions(input: {
 export function gitRunStackedActionMutationOptions(input: {
   cwd: string | null;
   queryClient: QueryClient;
+  defaultPullRequestBaseBranch?: string | null;
 }) {
   return mutationOptions({
     mutationKey: gitMutationKeys.runStackedAction(input.cwd),
@@ -134,6 +135,9 @@ export function gitRunStackedActionMutationOptions(input: {
         action,
         ...(commitMessage ? { commitMessage } : {}),
         ...(featureBranch ? { featureBranch } : {}),
+        ...(input.defaultPullRequestBaseBranch !== undefined
+          ? { defaultPullRequestBaseBranch: input.defaultPullRequestBaseBranch }
+          : {}),
       });
     },
     onSettled: async () => {

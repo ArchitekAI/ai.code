@@ -38,6 +38,8 @@ import { BunPtyAdapterLive } from "./terminal/Layers/BunPTY";
 import { NodePtyAdapterLive } from "./terminal/Layers/NodePTY";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService";
 import { WorktreeArchiveMetadataRepositoryLive } from "./persistence/Layers/WorktreeArchiveMetadata";
+import { WorktreeCheckTodoRepositoryLive } from "./persistence/Layers/WorktreeCheckTodos";
+import { WorktreeChecksLive } from "./worktreeChecks/Layers/WorktreeChecks";
 
 export function makeServerProviderLayer(): Layer.Layer<
   ProviderService,
@@ -130,11 +132,18 @@ export function makeServerRuntimeServicesLayer() {
     Layer.provideMerge(WorktreeArchiveMetadataRepositoryLive),
   );
 
+  const worktreeChecksLayer = WorktreeChecksLive.pipe(
+    Layer.provideMerge(gitManagerLayer),
+    Layer.provideMerge(GitHubCliLive),
+    Layer.provideMerge(WorktreeCheckTodoRepositoryLive),
+  );
+
   return Layer.mergeAll(
     orchestrationReactorLayer,
     gitCoreLayer,
     gitManagerLayer,
     worktreeArchiveLayer,
+    worktreeChecksLayer,
     terminalLayer,
     KeybindingsLive,
   ).pipe(Layer.provideMerge(NodeServices.layer));

@@ -10,11 +10,12 @@ import { useEffect, useRef } from "react";
 import { QueryClient, useQueryClient } from "@tanstack/react-query";
 import { Throttler } from "@tanstack/react-pacer";
 
-import { APP_DISPLAY_NAME } from "../branding";
+import { APP_DISPLAY_NAME, getAppDisplayName } from "../branding";
 import { Button } from "../components/ui/button";
 import { AnchoredToastProvider, ToastProvider, toastManager } from "../components/ui/toast";
 import { serverConfigQueryOptions, serverQueryKeys } from "../lib/serverReactQuery";
 import { readNativeApi } from "../nativeApi";
+import { useAppSettings } from "../appSettings";
 import { clearPromotedDraftThreads, useComposerDraftStore } from "../composerDraftStore";
 import { useStore } from "../store";
 import { useTerminalStateStore } from "../terminalStateStore";
@@ -23,7 +24,10 @@ import { terminalRunningSubprocessFromEvent } from "../terminalActivity";
 import { onServerConfigUpdated, onServerWelcome } from "../wsNativeApi";
 import { providerQueryKeys } from "../lib/providerReactQuery";
 import { projectQueryKeys } from "../lib/projectReactQuery";
-import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
+import {
+  collectActiveTerminalThreadIds,
+  collectActiveTerminalWorktreeIds,
+} from "../lib/terminalStateCleanup";
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;
@@ -36,12 +40,17 @@ export const Route = createRootRouteWithContext<{
 });
 
 function RootRouteView() {
+  const {
+    settings: { customAppName },
+  } = useAppSettings();
+  const appDisplayName = getAppDisplayName(customAppName);
+
   if (!readNativeApi()) {
     return (
       <div className="flex h-screen flex-col bg-background text-foreground">
         <div className="flex flex-1 items-center justify-center">
           <p className="text-sm text-muted-foreground">
-            Connecting to {APP_DISPLAY_NAME} server...
+            Connecting to {appDisplayName} server...
           </p>
         </div>
       </div>
@@ -51,6 +60,7 @@ function RootRouteView() {
   return (
     <ToastProvider>
       <AnchoredToastProvider>
+        <AppIdentitySync customAppName={customAppName} />
         <EventRouter />
         <DesktopProjectBootstrap />
         <Outlet />
@@ -62,6 +72,10 @@ function RootRouteView() {
 function RootRouteErrorView({ error, reset }: ErrorComponentProps) {
   const message = errorMessage(error);
   const details = errorDetails(error);
+  const {
+    settings: { customAppName },
+  } = useAppSettings();
+  const appDisplayName = getAppDisplayName(customAppName);
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background px-4 py-10 text-foreground sm:px-6">
@@ -72,7 +86,7 @@ function RootRouteErrorView({ error, reset }: ErrorComponentProps) {
 
       <section className="relative w-full max-w-xl rounded-2xl border border-border/80 bg-card/90 p-6 shadow-2xl shadow-black/20 backdrop-blur-md sm:p-8">
         <p className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
-          {APP_DISPLAY_NAME}
+          {appDisplayName}
         </p>
         <h1 className="mt-3 text-2xl font-semibold tracking-tight sm:text-3xl">
           Something went wrong.
@@ -100,6 +114,24 @@ function RootRouteErrorView({ error, reset }: ErrorComponentProps) {
       </section>
     </div>
   );
+}
+
+function AppIdentitySync({ customAppName }: { customAppName: string }) {
+  useEffect(() => {
+    const appDisplayName = getAppDisplayName(customAppName);
+    document.title = appDisplayName;
+
+    const bridge = window.desktopBridge;
+    if (!bridge) {
+      return;
+    }
+
+    void bridge.setAppDisplayName(customAppName).catch(() => {
+      // Best-effort desktop title sync only.
+    });
+  }, [customAppName]);
+
+  return null;
 }
 
 function errorMessage(error: unknown): string {
@@ -136,6 +168,9 @@ function EventRouter() {
   const removeOrphanedTerminalStates = useTerminalStateStore(
     (store) => store.removeOrphanedTerminalStates,
   );
+  const removeOrphanedWorktreeTerminalStates = useTerminalStateStore(
+    (store) => store.removeOrphanedWorktreeTerminalStates,
+  );
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
@@ -166,7 +201,11 @@ function EventRouter() {
         snapshotThreads: snapshot.threads,
         draftThreadIds,
       });
+      const activeWorktreeIds = collectActiveTerminalWorktreeIds({
+        snapshotWorktrees: snapshot.worktrees,
+      });
       removeOrphanedTerminalStates(activeThreadIds);
+      removeOrphanedWorktreeTerminalStates(activeWorktreeIds);
       if (pending) {
         pending = false;
         await flushSnapshotSync();
@@ -310,6 +349,7 @@ function EventRouter() {
     navigate,
     queryClient,
     removeOrphanedTerminalStates,
+    removeOrphanedWorktreeTerminalStates,
     setProjectExpanded,
     syncServerReadModel,
   ]);

@@ -49,11 +49,13 @@ import { resolveShortcutCommand, shortcutKbdSequenceForCommand } from "../keybin
 import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
 import {
   gitArchiveWorktreeMutationOptions,
+  gitBranchesQueryOptions,
   gitCreateWorktreeMutationOptions,
   gitRemoveWorktreeMutationOptions,
   gitStatusQueryOptions,
 } from "../lib/gitReactQuery";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
+import { isTerminalFocused } from "../lib/terminalFocus";
 import { readNativeApi } from "../nativeApi";
 import { type DraftThreadEnvMode, useComposerDraftStore } from "../composerDraftStore";
 import { formatRelativeTime } from "../lib/relativeTime";
@@ -103,7 +105,9 @@ import {
   createManagedWorktreeSeed,
   findRootWorktree,
   getRootWorktreeId,
+  hasGitBranch,
   materializeWorktreeRecord,
+  resolveProjectWorktreeBaseBranch,
   worktreeDisplaySubtitle,
   worktreeDisplayTitle,
 } from "~/lib/worktrees";
@@ -335,7 +339,11 @@ export default function Sidebar() {
     (store) => store.clearWorktreeDraftThreadId,
   );
   const navigate = useNavigate();
-  const isOnSettings = useLocation({ select: (loc) => loc.pathname === "/settings" });
+  const isOnSettings = useLocation({
+    select: (loc) =>
+      loc.pathname === "/settings" ||
+      (loc.pathname.startsWith("/projects/") && loc.pathname.endsWith("/settings")),
+  });
   const isOnActivity = useLocation({ select: (loc) => loc.pathname === "/activity" });
   const { settings: appSettings } = useAppSettings();
   const routeThreadId = useParams({
@@ -805,12 +813,24 @@ export default function Sidebar() {
       }
 
       const baseStatus = await queryClient.fetchQuery(gitStatusQueryOptions(project.cwd));
-      const baseBranch = baseStatus.branch;
+      const branchList = await queryClient.fetchQuery(gitBranchesQueryOptions(project.cwd));
+      const baseBranch = resolveProjectWorktreeBaseBranch({
+        configuredBaseBranch: project.defaultWorktreeBaseBranch,
+        fallbackBranch: baseStatus.branch,
+      });
       if (!baseBranch) {
         toastManager.add({
           type: "error",
           title: "Cannot create worktree from detached HEAD",
           description: "Check out a branch in the main repo first.",
+        });
+        return;
+      }
+      if (!hasGitBranch(branchList.branches, baseBranch)) {
+        toastManager.add({
+          type: "error",
+          title: "Configured worktree base branch is unavailable",
+          description: `The branch "${baseBranch}" is no longer available in this repository.`,
         });
         return;
       }
@@ -1424,17 +1444,6 @@ export default function Sidebar() {
   );
 
   useEffect(() => {
-    const isTerminalFocused = (): boolean => {
-      const activeElement = document.activeElement;
-      if (!(activeElement instanceof HTMLElement)) {
-        return false;
-      }
-      if (activeElement.classList.contains("xterm-helper-textarea")) {
-        return true;
-      }
-      return activeElement.closest(".thread-terminal-drawer .xterm") !== null;
-    };
-
     const onWindowKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && selectedThreadIds.size > 0) {
         event.preventDefault();
@@ -1471,7 +1480,9 @@ export default function Sidebar() {
       const nextEnvMode: DraftThreadEnvMode =
         activeDraftThread?.envMode ??
         (activeWorktree?.isRoot === true || nextWorktreePath === null ? "local" : "worktree");
+      const terminalFocused = isTerminalFocused();
       if (isNewThreadShortcut(event)) {
+        if (terminalFocused) return;
         if (!activeProjectId || !activeWorktreeId) return;
         event.preventDefault();
         void handleNewThread({
@@ -1485,7 +1496,7 @@ export default function Sidebar() {
       }
       const command = resolveShortcutCommand(event, keybindings, {
         context: {
-          terminalFocus: isTerminalFocused(),
+          terminalFocus: terminalFocused,
           terminalOpen: false,
         },
       });
@@ -1498,6 +1509,7 @@ export default function Sidebar() {
       }
 
       if (command === "chat.newLocal") {
+        if (terminalFocused) return;
         if (!activeProjectId || !activeWorktreeId) return;
         event.preventDefault();
         void handleNewThread({
@@ -1511,6 +1523,7 @@ export default function Sidebar() {
       }
 
       if (command !== "chat.new") return;
+      if (terminalFocused) return;
       if (!activeProjectId || !activeWorktreeId) return;
       event.preventDefault();
       void handleNewThread({
@@ -1915,6 +1928,33 @@ export default function Sidebar() {
                                 {project.name}
                               </span>
                             </SidebarMenuButton>
+                            <Tooltip>
+                              <TooltipTrigger
+                                render={
+                                  <SidebarMenuAction
+                                    render={
+                                      <button
+                                        type="button"
+                                        aria-label={`Open repo settings for ${project.name}`}
+                                      />
+                                    }
+                                    showOnHover
+                                    className="top-1 right-7 size-5 rounded-md p-0 text-muted-foreground/70 hover:bg-secondary hover:text-foreground"
+                                    onClick={(event) => {
+                                      event.preventDefault();
+                                      event.stopPropagation();
+                                      void navigate({
+                                        to: "/projects/$projectId/settings",
+                                        params: { projectId: project.id },
+                                      });
+                                    }}
+                                  >
+                                    <SettingsIcon className="size-3.5" />
+                                  </SidebarMenuAction>
+                                }
+                              />
+                              <TooltipPopup side="top">Repo settings</TooltipPopup>
+                            </Tooltip>
                             <Tooltip>
                               <TooltipTrigger
                                 render={

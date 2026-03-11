@@ -38,6 +38,13 @@ describe("decider project scripts", () => {
     const event = Array.isArray(result) ? result[0] : result;
     expect(event.type).toBe("project.created");
     expect((event.payload as { scripts: unknown[] }).scripts).toEqual([]);
+    expect(
+      (event.payload as { defaultWorktreeBaseBranch: string | null }).defaultWorktreeBaseBranch,
+    ).toBeNull();
+    expect(
+      (event.payload as { defaultPullRequestBaseBranch: string | null })
+        .defaultPullRequestBaseBranch,
+    ).toBeNull();
   });
 
   it("propagates scripts in project.meta.update payload", async () => {
@@ -60,6 +67,8 @@ describe("decider project scripts", () => {
           title: "Scripts",
           workspaceRoot: "/tmp/scripts",
           defaultModel: null,
+          defaultWorktreeBaseBranch: null,
+          defaultPullRequestBaseBranch: null,
           scripts: [],
           createdAt: now,
           updatedAt: now,
@@ -94,6 +103,59 @@ describe("decider project scripts", () => {
     expect((event.payload as { scripts?: unknown[] }).scripts).toEqual(scripts);
   });
 
+  it("propagates repo branch settings in project.meta.update payload", async () => {
+    const now = new Date().toISOString();
+    const initial = createEmptyReadModel(now);
+    const readModel = await Effect.runPromise(
+      projectEvent(initial, {
+        sequence: 1,
+        eventId: asEventId("evt-project-create-settings"),
+        aggregateKind: "project",
+        aggregateId: asProjectId("project-settings"),
+        type: "project.created",
+        occurredAt: now,
+        commandId: CommandId.makeUnsafe("cmd-project-create-settings"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-project-create-settings"),
+        metadata: {},
+        payload: {
+          projectId: asProjectId("project-settings"),
+          title: "Settings",
+          workspaceRoot: "/tmp/settings",
+          defaultModel: null,
+          defaultWorktreeBaseBranch: null,
+          defaultPullRequestBaseBranch: null,
+          scripts: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      }),
+    );
+
+    const result = await Effect.runPromise(
+      decideOrchestrationCommand({
+        command: {
+          type: "project.meta.update",
+          commandId: CommandId.makeUnsafe("cmd-project-update-settings"),
+          projectId: asProjectId("project-settings"),
+          defaultWorktreeBaseBranch: "origin/main",
+          defaultPullRequestBaseBranch: "main",
+        },
+        readModel,
+      }),
+    );
+
+    const event = Array.isArray(result) ? result[0] : result;
+    expect(event.type).toBe("project.meta-updated");
+    expect(
+      (event.payload as { defaultWorktreeBaseBranch?: string | null }).defaultWorktreeBaseBranch,
+    ).toBe("origin/main");
+    expect(
+      (event.payload as { defaultPullRequestBaseBranch?: string | null })
+        .defaultPullRequestBaseBranch,
+    ).toBe("main");
+  });
+
   it("emits user message and turn-start-requested events for thread.turn.start", async () => {
     const now = new Date().toISOString();
     const initial = createEmptyReadModel(now);
@@ -114,6 +176,8 @@ describe("decider project scripts", () => {
           title: "Project",
           workspaceRoot: "/tmp/project",
           defaultModel: null,
+          defaultWorktreeBaseBranch: null,
+          defaultPullRequestBaseBranch: null,
           scripts: [],
           createdAt: now,
           updatedAt: now,
@@ -221,6 +285,8 @@ describe("decider project scripts", () => {
           title: "Project",
           workspaceRoot: "/tmp/project",
           defaultModel: null,
+          defaultWorktreeBaseBranch: null,
+          defaultPullRequestBaseBranch: null,
           scripts: [],
           createdAt: now,
           updatedAt: now,
@@ -300,6 +366,8 @@ describe("decider project scripts", () => {
           title: "Project",
           workspaceRoot: "/tmp/project",
           defaultModel: null,
+          defaultWorktreeBaseBranch: null,
+          defaultPullRequestBaseBranch: null,
           scripts: [],
           createdAt: now,
           updatedAt: now,

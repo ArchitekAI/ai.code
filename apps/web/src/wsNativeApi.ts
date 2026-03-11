@@ -112,6 +112,7 @@ export function createWsNativeApi(): NativeApi {
         transport.subscribe(WS_CHANNELS.terminalEvent, (message) => callback(message.data)),
     },
     projects: {
+      listEntries: (input) => transport.request(WS_METHODS.projectsListEntries, input),
       searchEntries: (input) => transport.request(WS_METHODS.projectsSearchEntries, input),
       writeFile: (input) => transport.request(WS_METHODS.projectsWriteFile, input),
     },
@@ -147,6 +148,13 @@ export function createWsNativeApi(): NativeApi {
       resolvePullRequest: (input) => transport.request(WS_METHODS.gitResolvePullRequest, input),
       preparePullRequestThread: (input) =>
         transport.request(WS_METHODS.gitPreparePullRequestThread, input),
+      updatePullRequest: (input) => transport.request(WS_METHODS.gitUpdatePullRequest, input),
+    },
+    worktreeChecks: {
+      get: (input) => transport.request(WS_METHODS.worktreeChecksGet, input),
+      addTodo: (input) => transport.request(WS_METHODS.worktreeChecksAddTodo, input),
+      updateTodo: (input) => transport.request(WS_METHODS.worktreeChecksUpdateTodo, input),
+      deleteTodo: (input) => transport.request(WS_METHODS.worktreeChecksDeleteTodo, input),
     },
     contextMenu: {
       show: async <T extends string>(

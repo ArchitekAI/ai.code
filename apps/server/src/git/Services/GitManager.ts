@@ -15,6 +15,8 @@ import {
   GitRunStackedActionResult,
   GitStatusInput,
   GitStatusResult,
+  GitUpdatePullRequestInput,
+  GitUpdatePullRequestResult,
 } from "@repo/contracts";
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
@@ -44,6 +46,13 @@ export interface GitManagerShape {
   readonly preparePullRequestThread: (
     input: GitPreparePullRequestThreadInput,
   ) => Effect.Effect<GitPreparePullRequestThreadResult, GitManagerServiceError>;
+
+  /**
+   * Update pull request metadata in GitHub.
+   */
+  readonly updatePullRequest: (
+    input: GitUpdatePullRequestInput,
+  ) => Effect.Effect<GitUpdatePullRequestResult, GitManagerServiceError>;
 
   /**
    * Run a stacked Git action (`commit`, `commit_push`, `commit_push_pr`).

@@ -1,16 +1,45 @@
-import { ThreadId } from "@repo/contracts";
-import { beforeEach, describe, expect, it } from "vitest";
+import { ThreadId, WorktreeId } from "@repo/contracts";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { selectThreadTerminalState, useTerminalStateStore } from "./terminalStateStore";
+import {
+  selectThreadTerminalState,
+  selectWorktreeTerminalState,
+  useTerminalStateStore,
+} from "./terminalStateStore";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-1");
+const WORKTREE_ID = WorktreeId.makeUnsafe("worktree-1");
+
+function createMemoryStorage(): Storage {
+  const values = new Map<string, string>();
+
+  return {
+    get length() {
+      return values.size;
+    },
+    clear() {
+      values.clear();
+    },
+    getItem(key) {
+      return values.get(key) ?? null;
+    },
+    key(index) {
+      return [...values.keys()][index] ?? null;
+    },
+    removeItem(key) {
+      values.delete(key);
+    },
+    setItem(key, value) {
+      values.set(key, value);
+    },
+  };
+}
 
 describe("terminalStateStore actions", () => {
   beforeEach(() => {
-    if (typeof localStorage !== "undefined") {
-      localStorage.clear();
-    }
-    useTerminalStateStore.setState({ terminalStateByThreadId: {} });
+    vi.unstubAllGlobals();
+    vi.stubGlobal("localStorage", createMemoryStorage());
+    useTerminalStateStore.setState({ terminalStateByThreadId: {}, terminalStateByWorktreeId: {} });
   });
 
   it("returns a closed default terminal state for unknown threads", () => {
@@ -104,5 +133,29 @@ describe("terminalStateStore actions", () => {
     expect(terminalState.terminalGroups).toEqual([
       { id: "group-default", terminalIds: ["default", "terminal-2"] },
     ]);
+  });
+
+  it("tracks worktree-owned terminal state independently from thread terminals", () => {
+    const store = useTerminalStateStore.getState();
+    store.setWorktreeTerminalOpen(WORKTREE_ID, true);
+    store.newWorktreeTerminal(WORKTREE_ID, "terminal-2");
+    store.setWorktreeTerminalActivity(WORKTREE_ID, "terminal-2", true);
+
+    const worktreeTerminalState = selectWorktreeTerminalState(
+      useTerminalStateStore.getState().terminalStateByWorktreeId,
+      WORKTREE_ID,
+    );
+
+    expect(worktreeTerminalState.terminalOpen).toBe(true);
+    expect(worktreeTerminalState.terminalIds).toEqual(["default", "terminal-2"]);
+    expect(worktreeTerminalState.activeTerminalId).toBe("terminal-2");
+    expect(worktreeTerminalState.runningTerminalIds).toEqual(["terminal-2"]);
+
+    const threadTerminalState = selectThreadTerminalState(
+      useTerminalStateStore.getState().terminalStateByThreadId,
+      THREAD_ID,
+    );
+    expect(threadTerminalState.terminalOpen).toBe(false);
+    expect(threadTerminalState.terminalIds).toEqual(["default"]);
   });
 });

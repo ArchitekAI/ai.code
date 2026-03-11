@@ -30,6 +30,7 @@ import {
   GitRemoveWorktreeInput,
   GitRunStackedActionInput,
   GitStatusInput,
+  GitUpdatePullRequestInput,
   GitUnarchiveWorktreeInput,
 } from "./git";
 import {
@@ -42,7 +43,17 @@ import {
   TerminalWriteInput,
 } from "./terminal";
 import { KeybindingRule } from "./keybindings";
-import { ProjectSearchEntriesInput, ProjectWriteFileInput } from "./project";
+import {
+  ProjectListEntriesInput,
+  ProjectSearchEntriesInput,
+  ProjectWriteFileInput,
+} from "./project";
+import {
+  WorktreeChecksAddTodoInput,
+  WorktreeChecksDeleteTodoInput,
+  WorktreeChecksGetInput,
+  WorktreeChecksUpdateTodoInput,
+} from "./worktreeChecks";
 import { OpenInEditorInput } from "./editor";
 import { ServerConfigUpdatedPayload } from "./server";
 
@@ -53,6 +64,7 @@ export const WS_METHODS = {
   projectsList: "projects.list",
   projectsAdd: "projects.add",
   projectsRemove: "projects.remove",
+  projectsListEntries: "projects.listEntries",
   projectsSearchEntries: "projects.searchEntries",
   projectsWriteFile: "projects.writeFile",
 
@@ -73,6 +85,13 @@ export const WS_METHODS = {
   gitInit: "git.init",
   gitResolvePullRequest: "git.resolvePullRequest",
   gitPreparePullRequestThread: "git.preparePullRequestThread",
+  gitUpdatePullRequest: "git.updatePullRequest",
+
+  // Worktree checks
+  worktreeChecksGet: "worktreeChecks.get",
+  worktreeChecksAddTodo: "worktreeChecks.addTodo",
+  worktreeChecksUpdateTodo: "worktreeChecks.updateTodo",
+  worktreeChecksDeleteTodo: "worktreeChecks.deleteTodo",
 
   // Terminal methods
   terminalOpen: "terminal.open",
@@ -119,6 +138,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(ORCHESTRATION_WS_METHODS.replayEvents, OrchestrationReplayEventsInput),
 
   // Project Search
+  tagRequestBody(WS_METHODS.projectsListEntries, ProjectListEntriesInput),
   tagRequestBody(WS_METHODS.projectsSearchEntries, ProjectSearchEntriesInput),
   tagRequestBody(WS_METHODS.projectsWriteFile, ProjectWriteFileInput),
 
@@ -139,6 +159,13 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.gitInit, GitInitInput),
   tagRequestBody(WS_METHODS.gitResolvePullRequest, GitPullRequestRefInput),
   tagRequestBody(WS_METHODS.gitPreparePullRequestThread, GitPreparePullRequestThreadInput),
+  tagRequestBody(WS_METHODS.gitUpdatePullRequest, GitUpdatePullRequestInput),
+
+  // Worktree checks
+  tagRequestBody(WS_METHODS.worktreeChecksGet, WorktreeChecksGetInput),
+  tagRequestBody(WS_METHODS.worktreeChecksAddTodo, WorktreeChecksAddTodoInput),
+  tagRequestBody(WS_METHODS.worktreeChecksUpdateTodo, WorktreeChecksUpdateTodoInput),
+  tagRequestBody(WS_METHODS.worktreeChecksDeleteTodo, WorktreeChecksDeleteTodoInput),
 
   // Terminal methods
   tagRequestBody(WS_METHODS.terminalOpen, TerminalOpenInput),

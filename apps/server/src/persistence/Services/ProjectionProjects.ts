@@ -17,6 +17,8 @@ export const ProjectionProject = Schema.Struct({
   title: Schema.String,
   workspaceRoot: Schema.String,
   defaultModel: Schema.NullOr(Schema.String),
+  defaultWorktreeBaseBranch: Schema.NullOr(Schema.String),
+  defaultPullRequestBaseBranch: Schema.NullOr(Schema.String),
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,

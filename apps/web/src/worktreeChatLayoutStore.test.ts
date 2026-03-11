@@ -85,7 +85,10 @@ describe("worktreeChatLayoutStore", () => {
     vi.unstubAllGlobals();
     vi.stubGlobal("localStorage", createMemoryStorage());
     worktreeChatLayoutStoreModule = await import("./worktreeChatLayoutStore");
-    worktreeChatLayoutStoreModule.useWorktreeChatLayoutStore.setState({ layoutsByWorktreeId: {} });
+    worktreeChatLayoutStoreModule.useWorktreeChatLayoutStore.setState({
+      layoutsByWorktreeId: {},
+      rightRailStateByWorktreeId: {},
+    });
   });
 
   it("stores layouts by worktree id", () => {
@@ -151,5 +154,46 @@ describe("worktreeChatLayoutStore", () => {
 
     expect(sanitized).not.toBeNull();
     expect(Object.keys(sanitized?.panels ?? {})).toEqual([THREAD_B]);
+  });
+
+  it("provides a default right-rail state per worktree", () => {
+    const rightRailState = worktreeChatLayoutStoreModule.selectWorktreeRightRailState(
+      {},
+      WORKTREE_ID,
+    );
+
+    expect(rightRailState).toEqual({
+      open: true,
+      width: 336,
+      activeTab: "all-files",
+      allFilesViewMode: "tree",
+      changesViewMode: "tree",
+      allFilesExpandedPaths: null,
+      changesExpandedPaths: null,
+    });
+  });
+
+  it("stores right-rail state by worktree id", () => {
+    worktreeChatLayoutStoreModule.useWorktreeChatLayoutStore
+      .getState()
+      .setRightRailState(WORKTREE_ID, {
+        open: false,
+        width: 420,
+        activeTab: "checks",
+      });
+
+    expect(
+      worktreeChatLayoutStoreModule.selectWorktreeRightRailState(
+        worktreeChatLayoutStoreModule.useWorktreeChatLayoutStore.getState()
+          .rightRailStateByWorktreeId,
+        WORKTREE_ID,
+      ),
+    ).toMatchObject({
+      open: false,
+      width: 420,
+      activeTab: "checks",
+      allFilesViewMode: "tree",
+      changesViewMode: "tree",
+    });
   });
 });

@@ -27,6 +27,8 @@ import Migration0012 from "./Migrations/012_ProjectionThreadsInteractionMode.ts"
 import Migration0013 from "./Migrations/013_ProjectionThreadProposedPlans.ts";
 import Migration0014 from "./Migrations/014_ProjectionWorktrees.ts";
 import Migration0015 from "./Migrations/015_WorktreeArchiveMetadata.ts";
+import Migration0016 from "./Migrations/016_WorktreeCheckTodos.ts";
+import Migration0017 from "./Migrations/017_ProjectRepoSettings.ts";
 import { Effect } from "effect";
 
 /**
@@ -55,6 +57,8 @@ const loader = Migrator.fromRecord({
   "13_ProjectionThreadProposedPlans": Migration0013,
   "14_ProjectionWorktrees": Migration0014,
   "15_WorktreeArchiveMetadata": Migration0015,
+  "16_WorktreeCheckTodos": Migration0016,
+  "17_ProjectRepoSettings": Migration0017,
 });
 
 /**

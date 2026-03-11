@@ -609,11 +609,13 @@ export const makeGitManager = Effect.gen(function* () {
     cwd: string,
     branch: string,
     upstreamRef: string | null,
+    defaultPullRequestBaseBranch: string | null | undefined,
     headContext: Pick<BranchHeadContext, "isCrossRepository">,
   ) =>
     Effect.gen(function* () {
-      const configured = yield* gitCore.readConfigValue(cwd, `branch.${branch}.gh-merge-base`);
-      if (configured) return configured;
+      if (defaultPullRequestBaseBranch && defaultPullRequestBaseBranch.trim().length > 0) {
+        return defaultPullRequestBaseBranch.trim();
+      }
 
       if (upstreamRef && !headContext.isCrossRepository) {
         const upstreamBranch = extractBranchFromRef(upstreamRef);
@@ -701,7 +703,11 @@ export const makeGitManager = Effect.gen(function* () {
       };
     });
 
-  const runPrStep = (cwd: string, fallbackBranch: string | null) =>
+  const runPrStep = (
+    cwd: string,
+    fallbackBranch: string | null,
+    defaultPullRequestBaseBranch: string | null | undefined,
+  ) =>
     Effect.gen(function* () {
       const details = yield* gitCore.statusDetails(cwd);
       const branch = details.branch ?? fallbackBranch;
@@ -735,7 +741,13 @@ export const makeGitManager = Effect.gen(function* () {
         };
       }
 
-      const baseBranch = yield* resolveBaseBranch(cwd, branch, details.upstreamRef, headContext);
+      const baseBranch = yield* resolveBaseBranch(
+        cwd,
+        branch,
+        details.upstreamRef,
+        defaultPullRequestBaseBranch,
+        headContext,
+      );
       const rangeContext = yield* gitCore.readRangeContext(cwd, baseBranch);
 
       const generated = yield* textGeneration.generatePrContent({
@@ -802,6 +814,7 @@ export const makeGitManager = Effect.gen(function* () {
     return {
       branch: details.branch,
       hasWorkingTreeChanges: details.hasWorkingTreeChanges,
+      hasMergeConflicts: details.hasMergeConflicts,
       workingTree: details.workingTree,
       hasUpstream: details.hasUpstream,
       aheadCount: details.aheadCount,
@@ -964,6 +977,23 @@ export const makeGitManager = Effect.gen(function* () {
     },
   );
 
+  const updatePullRequest: GitManagerShape["updatePullRequest"] = Effect.fnUntraced(
+    function* (input) {
+      yield* gitHubCli.updatePullRequest({
+        cwd: input.cwd,
+        reference: String(input.number),
+        title: input.title,
+        body: input.body,
+      });
+
+      return {
+        number: input.number,
+        title: input.title,
+        body: input.body,
+      };
+    },
+  );
+
   const runFeatureBranchStep = (cwd: string, branch: string | null, commitMessage?: string) =>
     Effect.gen(function* () {
       const suggestion = yield* resolveCommitAndBranchSuggestion({
@@ -1040,7 +1070,7 @@ export const makeGitManager = Effect.gen(function* () {
         : { status: "skipped_not_requested" as const };
 
       const pr = wantsPr
-        ? yield* runPrStep(input.cwd, currentBranch)
+        ? yield* runPrStep(input.cwd, currentBranch, input.defaultPullRequestBaseBranch)
         : { status: "skipped_not_requested" as const };
 
       return {
@@ -1057,6 +1087,7 @@ export const makeGitManager = Effect.gen(function* () {
     status,
     resolvePullRequest,
     preparePullRequestThread,
+    updatePullRequest,
     runStackedAction,
   } satisfies GitManagerShape;
 });

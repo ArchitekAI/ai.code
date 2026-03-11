@@ -23,6 +23,17 @@ export interface GitHubPullRequestSummary {
   readonly headRepositoryOwnerLogin?: string | null;
 }
 
+export interface GitHubPullRequestDetails extends GitHubPullRequestSummary {
+  readonly body: string;
+  readonly reviewDecision?: string | null;
+  readonly isDraft: boolean;
+  readonly headRefOid?: string | null;
+  readonly updatedAt?: string | null;
+  readonly statusCheckRollup?: unknown;
+  readonly comments?: unknown;
+  readonly reviews?: unknown;
+}
+
 export interface GitHubRepositoryCloneUrls {
   readonly nameWithOwner: string;
   readonly url: string;
@@ -60,6 +71,14 @@ export interface GitHubCliShape {
   }) => Effect.Effect<GitHubPullRequestSummary, GitHubCliError>;
 
   /**
+   * Resolve a pull request with richer metadata for the checks sidebar.
+   */
+  readonly getPullRequestDetails: (input: {
+    readonly cwd: string;
+    readonly reference: string;
+  }) => Effect.Effect<GitHubPullRequestDetails, GitHubCliError>;
+
+  /**
    * Resolve clone URLs for a GitHub repository.
    */
   readonly getRepositoryCloneUrls: (input: {
@@ -92,6 +111,16 @@ export interface GitHubCliShape {
     readonly cwd: string;
     readonly reference: string;
     readonly force?: boolean;
+  }) => Effect.Effect<void, GitHubCliError>;
+
+  /**
+   * Update a pull request title/body.
+   */
+  readonly updatePullRequest: (input: {
+    readonly cwd: string;
+    readonly reference: string;
+    readonly title: string;
+    readonly body: string;
   }) => Effect.Effect<void, GitHubCliError>;
 }
 

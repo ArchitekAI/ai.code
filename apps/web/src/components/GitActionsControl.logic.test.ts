@@ -14,6 +14,7 @@ function status(overrides: Partial<GitStatusResult> = {}): GitStatusResult {
   return {
     branch: "feature/test",
     hasWorkingTreeChanges: false,
+    hasMergeConflicts: false,
     workingTree: {
       files: [],
       insertions: 0,

@@ -51,10 +51,12 @@ import {
 import { gitBranchesQueryOptions, gitCreateWorktreeMutationOptions } from "~/lib/gitReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
+import { isTerminalFocused } from "~/lib/terminalFocus";
 import {
   createManagedWorktreeSeed,
   findRootWorktree,
   getRootWorktreeId,
+  hasGitBranch,
   materializeWorktreeRecord,
 } from "~/lib/worktrees";
 
@@ -2417,13 +2419,6 @@ export default function ChatView({
       return;
     }
 
-    const isTerminalFocused = (): boolean => {
-      const activeElement = document.activeElement;
-      if (!(activeElement instanceof HTMLElement)) return false;
-      if (activeElement.classList.contains("xterm-helper-textarea")) return true;
-      return activeElement.closest(".thread-terminal-drawer .xterm") !== null;
-    };
-
     const handler = (event: globalThis.KeyboardEvent) => {
       if (!activeThreadId || event.defaultPrevented) return;
       const shortcutContext = {
@@ -2776,6 +2771,12 @@ export default function ChatView({
           ),
           branchPrefix: settings.gitBranchPrefix,
         });
+        const branchList = await queryClient.fetchQuery(gitBranchesQueryOptions(activeProject.cwd));
+        if (!hasGitBranch(branchList.branches, baseBranchForWorktree)) {
+          throw new Error(
+            `The selected worktree base branch "${baseBranchForWorktree}" is no longer available in this repository.`,
+          );
+        }
         const result = await createWorktreeMutation.mutateAsync({
           cwd: activeProject.cwd,
           branch: baseBranchForWorktree,
@@ -3686,6 +3687,7 @@ export default function ChatView({
             activeThreadId={activeThread.id}
             activeThreadTitle={activeThread.title}
             activeProjectName={activeProject?.name}
+            defaultPullRequestBaseBranch={activeProject?.defaultPullRequestBaseBranch ?? null}
             isGitRepo={isGitRepo}
             openInCwd={activeThread.worktreePath ?? activeProject?.cwd ?? null}
             activeProjectScripts={activeProject?.scripts}
@@ -4419,6 +4421,7 @@ interface ChatHeaderProps {
   activeThreadId: ThreadId;
   activeThreadTitle: string;
   activeProjectName: string | undefined;
+  defaultPullRequestBaseBranch: string | null;
   isGitRepo: boolean;
   openInCwd: string | null;
   activeProjectScripts: ProjectScript[] | undefined;
@@ -4439,6 +4442,7 @@ const ChatHeader = memo(function ChatHeader({
   activeThreadId,
   activeThreadTitle,
   activeProjectName,
+  defaultPullRequestBaseBranch,
   isGitRepo,
   openInCwd,
   activeProjectScripts,
@@ -4494,7 +4498,13 @@ const ChatHeader = memo(function ChatHeader({
             openInCwd={openInCwd}
           />
         )}
-        {activeProjectName && <GitActionsControl gitCwd={gitCwd} activeThreadId={activeThreadId} />}
+        {activeProjectName && (
+          <GitActionsControl
+            gitCwd={gitCwd}
+            activeThreadId={activeThreadId}
+            defaultPullRequestBaseBranch={defaultPullRequestBaseBranch}
+          />
+        )}
         <Tooltip>
           <TooltipTrigger
             render={

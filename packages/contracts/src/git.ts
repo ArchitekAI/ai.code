@@ -65,6 +65,7 @@ export const GitRunStackedActionInput = Schema.Struct({
   action: GitStackedAction,
   commitMessage: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(10_000))),
   featureBranch: Schema.optional(Schema.Boolean),
+  defaultPullRequestBaseBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyStringSchema)),
 });
 export type GitRunStackedActionInput = typeof GitRunStackedActionInput.Type;
 
@@ -146,6 +147,7 @@ const GitStatusPr = Schema.Struct({
 export const GitStatusResult = Schema.Struct({
   branch: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
   hasWorkingTreeChanges: Schema.Boolean,
+  hasMergeConflicts: Schema.Boolean,
   workingTree: Schema.Struct({
     files: Schema.Array(
       Schema.Struct({
@@ -163,6 +165,21 @@ export const GitStatusResult = Schema.Struct({
   pr: Schema.NullOr(GitStatusPr),
 });
 export type GitStatusResult = typeof GitStatusResult.Type;
+
+export const GitUpdatePullRequestInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  number: PositiveInt,
+  title: TrimmedNonEmptyStringSchema,
+  body: Schema.String,
+});
+export type GitUpdatePullRequestInput = typeof GitUpdatePullRequestInput.Type;
+
+export const GitUpdatePullRequestResult = Schema.Struct({
+  number: PositiveInt,
+  title: TrimmedNonEmptyStringSchema,
+  body: Schema.String,
+});
+export type GitUpdatePullRequestResult = typeof GitUpdatePullRequestResult.Type;
 
 export const GitListBranchesResult = Schema.Struct({
   branches: Schema.Array(GitBranch),

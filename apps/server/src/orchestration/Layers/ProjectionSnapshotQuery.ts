@@ -41,6 +41,7 @@ import {
   ProjectionSnapshotQuery,
   type ProjectionSnapshotQueryShape,
 } from "../Services/ProjectionSnapshotQuery.ts";
+import { managedWorktreeRootForRepoPath } from "../../git/managedWorktreePaths.ts";
 
 const decodeReadModel = Schema.decodeUnknownEffect(OrchestrationReadModel);
 const ProjectionProjectDbRowSchema = ProjectionProject.mapFields(
@@ -147,6 +148,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           title,
           workspace_root AS "workspaceRoot",
           default_model AS "defaultModel",
+          default_worktree_base_branch AS "defaultWorktreeBaseBranch",
+          default_pull_request_base_branch AS "defaultPullRequestBaseBranch",
           scripts_json AS "scripts",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -557,7 +560,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             id: row.projectId,
             title: row.title,
             workspaceRoot: row.workspaceRoot,
+            managedWorktreeRoot: managedWorktreeRootForRepoPath(row.workspaceRoot),
             defaultModel: row.defaultModel,
+            defaultWorktreeBaseBranch: row.defaultWorktreeBaseBranch,
+            defaultPullRequestBaseBranch: row.defaultPullRequestBaseBranch,
             scripts: row.scripts,
             createdAt: row.createdAt,
             updatedAt: row.updatedAt,

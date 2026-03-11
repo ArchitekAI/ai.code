@@ -43,6 +43,7 @@ import { toastManager } from "./ui/toast";
 
 interface BranchToolbarBranchSelectorProps {
   activeProjectCwd: string;
+  defaultWorktreeBaseBranch: string | null;
   activeThreadBranch: string | null;
   activeWorktreePath: string | null;
   branchCwd: string | null;
@@ -74,6 +75,7 @@ function getBranchTriggerLabel(input: {
 
 export function BranchToolbarBranchSelector({
   activeProjectCwd,
+  defaultWorktreeBaseBranch,
   activeThreadBranch,
   activeWorktreePath,
   branchCwd,
@@ -253,19 +255,21 @@ export function BranchToolbarBranchSelector({
   };
 
   useEffect(() => {
-    if (
-      effectiveEnvMode !== "worktree" ||
-      activeWorktreePath ||
-      activeThreadBranch ||
-      !currentGitBranch
-    ) {
+    if (effectiveEnvMode !== "worktree" || activeWorktreePath || activeThreadBranch) {
       return;
     }
-    onSetThreadBranch(currentGitBranch, null);
+
+    const nextBaseBranch = defaultWorktreeBaseBranch ?? currentGitBranch;
+    if (!nextBaseBranch) {
+      return;
+    }
+
+    onSetThreadBranch(nextBaseBranch, null);
   }, [
     activeThreadBranch,
     activeWorktreePath,
     currentGitBranch,
+    defaultWorktreeBaseBranch,
     effectiveEnvMode,
     onSetThreadBranch,
   ]);

@@ -5,6 +5,20 @@ import type { SerializedDockview } from "dockview";
 import type { GroupviewPanelState } from "dockview";
 
 export const WORKTREE_CHAT_LAYOUT_STORAGE_KEY = "t3code:worktree-chat-layouts:v1";
+const DEFAULT_RIGHT_RAIL_WIDTH = 336;
+
+export type WorktreeRightRailTab = "all-files" | "changes" | "checks";
+export type WorktreeExplorerViewMode = "tree" | "list";
+
+export interface WorktreeRightRailState {
+  open: boolean;
+  width: number;
+  activeTab: WorktreeRightRailTab;
+  allFilesViewMode: WorktreeExplorerViewMode;
+  changesViewMode: WorktreeExplorerViewMode;
+  allFilesExpandedPaths: string[] | null;
+  changesExpandedPaths: string[] | null;
+}
 
 export interface WorktreeDockPanelParams {
   threadId: ThreadId;
@@ -14,8 +28,35 @@ export interface WorktreeDockPanelParams {
 
 interface WorktreeChatLayoutStoreState {
   layoutsByWorktreeId: Partial<Record<WorktreeId, SerializedDockview>>;
+  rightRailStateByWorktreeId: Partial<Record<WorktreeId, WorktreeRightRailState>>;
   setLayout: (worktreeId: WorktreeId, layout: SerializedDockview) => void;
   clearLayout: (worktreeId: WorktreeId) => void;
+  setRightRailState: (
+    worktreeId: WorktreeId,
+    updater:
+      | Partial<WorktreeRightRailState>
+      | ((state: WorktreeRightRailState) => Partial<WorktreeRightRailState>),
+  ) => void;
+  clearRightRailState: (worktreeId: WorktreeId) => void;
+}
+
+export function createDefaultWorktreeRightRailState(): WorktreeRightRailState {
+  return {
+    open: true,
+    width: DEFAULT_RIGHT_RAIL_WIDTH,
+    activeTab: "all-files",
+    allFilesViewMode: "tree",
+    changesViewMode: "tree",
+    allFilesExpandedPaths: null,
+    changesExpandedPaths: null,
+  };
+}
+
+export function selectWorktreeRightRailState(
+  stateByWorktreeId: Partial<Record<WorktreeId, WorktreeRightRailState>>,
+  worktreeId: WorktreeId,
+): WorktreeRightRailState {
+  return stateByWorktreeId[worktreeId] ?? createDefaultWorktreeRightRailState();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -175,6 +216,7 @@ export const useWorktreeChatLayoutStore = create<WorktreeChatLayoutStoreState>()
   persist(
     (set) => ({
       layoutsByWorktreeId: {},
+      rightRailStateByWorktreeId: {},
       setLayout: (worktreeId, layout) =>
         set((state) => ({
           layoutsByWorktreeId: {
@@ -191,14 +233,56 @@ export const useWorktreeChatLayoutStore = create<WorktreeChatLayoutStoreState>()
           delete next[worktreeId];
           return { layoutsByWorktreeId: next };
         }),
+      setRightRailState: (worktreeId, updater) =>
+        set((state) => {
+          const current = selectWorktreeRightRailState(
+            state.rightRailStateByWorktreeId,
+            worktreeId,
+          );
+          const patch = typeof updater === "function" ? updater(current) : updater;
+          const nextValue: WorktreeRightRailState = {
+            ...current,
+            ...patch,
+          };
+          return {
+            rightRailStateByWorktreeId: {
+              ...state.rightRailStateByWorktreeId,
+              [worktreeId]: nextValue,
+            },
+          };
+        }),
+      clearRightRailState: (worktreeId) =>
+        set((state) => {
+          if (!state.rightRailStateByWorktreeId[worktreeId]) {
+            return state;
+          }
+          const next = { ...state.rightRailStateByWorktreeId };
+          delete next[worktreeId];
+          return { rightRailStateByWorktreeId: next };
+        }),
     }),
     {
       name: WORKTREE_CHAT_LAYOUT_STORAGE_KEY,
-      version: 1,
+      version: 2,
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
         layoutsByWorktreeId: state.layoutsByWorktreeId,
+        rightRailStateByWorktreeId: state.rightRailStateByWorktreeId,
       }),
+      migrate: (persistedState) => {
+        if (!persistedState || typeof persistedState !== "object") {
+          return {
+            layoutsByWorktreeId: {},
+            rightRailStateByWorktreeId: {},
+          } satisfies Partial<WorktreeChatLayoutStoreState>;
+        }
+
+        const value = persistedState as Partial<WorktreeChatLayoutStoreState>;
+        return {
+          layoutsByWorktreeId: value.layoutsByWorktreeId ?? {},
+          rightRailStateByWorktreeId: value.rightRailStateByWorktreeId ?? {},
+        } satisfies Partial<WorktreeChatLayoutStoreState>;
+      },
     },
   ),
 );

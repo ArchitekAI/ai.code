@@ -19,10 +19,14 @@ import type {
   GitRunStackedActionResult,
   GitStatusInput,
   GitStatusResult,
+  GitUpdatePullRequestInput,
+  GitUpdatePullRequestResult,
   GitUnarchiveWorktreeInput,
   GitUnarchiveWorktreeResult,
 } from "./git";
 import type {
+  ProjectListEntriesInput,
+  ProjectListEntriesResult,
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
   ProjectWriteFileInput,
@@ -50,6 +54,16 @@ import type {
   OrchestrationReadModel,
 } from "./orchestration";
 import { EditorId } from "./editor";
+import type {
+  WorktreeChecksAddTodoInput,
+  WorktreeChecksAddTodoResult,
+  WorktreeChecksDeleteTodoInput,
+  WorktreeChecksDeleteTodoResult,
+  WorktreeChecksGetInput,
+  WorktreeChecksGetResult,
+  WorktreeChecksUpdateTodoInput,
+  WorktreeChecksUpdateTodoResult,
+} from "./worktreeChecks";
 
 export interface ContextMenuItem<T extends string = string> {
   id: T;
@@ -103,6 +117,7 @@ export interface DesktopBridge {
   pickFolder: () => Promise<string | null>;
   confirm: (message: string) => Promise<boolean>;
   setTheme: (theme: DesktopTheme) => Promise<void>;
+  setAppDisplayName: (appDisplayName: string) => Promise<void>;
   showContextMenu: <T extends string>(
     items: readonly ContextMenuItem<T>[],
     position?: { x: number; y: number },
@@ -130,6 +145,7 @@ export interface NativeApi {
     onEvent: (callback: (event: TerminalEvent) => void) => () => void;
   };
   projects: {
+    listEntries: (input: ProjectListEntriesInput) => Promise<ProjectListEntriesResult>;
     searchEntries: (input: ProjectSearchEntriesInput) => Promise<ProjectSearchEntriesResult>;
     writeFile: (input: ProjectWriteFileInput) => Promise<ProjectWriteFileResult>;
   };
@@ -151,10 +167,17 @@ export interface NativeApi {
     preparePullRequestThread: (
       input: GitPreparePullRequestThreadInput,
     ) => Promise<GitPreparePullRequestThreadResult>;
+    updatePullRequest: (input: GitUpdatePullRequestInput) => Promise<GitUpdatePullRequestResult>;
     // Stacked action API
     pull: (input: GitPullInput) => Promise<GitPullResult>;
     status: (input: GitStatusInput) => Promise<GitStatusResult>;
     runStackedAction: (input: GitRunStackedActionInput) => Promise<GitRunStackedActionResult>;
+  };
+  worktreeChecks: {
+    get: (input: WorktreeChecksGetInput) => Promise<WorktreeChecksGetResult>;
+    addTodo: (input: WorktreeChecksAddTodoInput) => Promise<WorktreeChecksAddTodoResult>;
+    updateTodo: (input: WorktreeChecksUpdateTodoInput) => Promise<WorktreeChecksUpdateTodoResult>;
+    deleteTodo: (input: WorktreeChecksDeleteTodoInput) => Promise<WorktreeChecksDeleteTodoResult>;
   };
   contextMenu: {
     show: <T extends string>(

@@ -134,7 +134,14 @@ export const OrchestrationProject = Schema.Struct({
   id: ProjectId,
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
+  managedWorktreeRoot: TrimmedNonEmptyString,
   defaultModel: Schema.NullOr(TrimmedNonEmptyString),
+  defaultWorktreeBaseBranch: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  defaultPullRequestBaseBranch: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -315,6 +322,8 @@ const ProjectMetaUpdateCommand = Schema.Struct({
   title: Schema.optional(TrimmedNonEmptyString),
   workspaceRoot: Schema.optional(TrimmedNonEmptyString),
   defaultModel: Schema.optional(TrimmedNonEmptyString),
+  defaultWorktreeBaseBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  defaultPullRequestBaseBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
 });
 
@@ -661,6 +670,12 @@ export const ProjectCreatedPayload = Schema.Struct({
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
   defaultModel: Schema.NullOr(TrimmedNonEmptyString),
+  defaultWorktreeBaseBranch: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  defaultPullRequestBaseBranch: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -671,6 +686,8 @@ export const ProjectMetaUpdatedPayload = Schema.Struct({
   title: Schema.optional(TrimmedNonEmptyString),
   workspaceRoot: Schema.optional(TrimmedNonEmptyString),
   defaultModel: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  defaultWorktreeBaseBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  defaultPullRequestBaseBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
   updatedAt: IsoDateTime,
 });

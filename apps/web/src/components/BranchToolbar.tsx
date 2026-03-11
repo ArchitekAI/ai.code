@@ -126,6 +126,7 @@ export default function BranchToolbar({
 
       <BranchToolbarBranchSelector
         activeProjectCwd={activeProject.cwd}
+        defaultWorktreeBaseBranch={activeProject.defaultWorktreeBaseBranch}
         activeThreadBranch={activeThreadBranch}
         activeWorktreePath={activeWorktreePath}
         branchCwd={branchCwd}

@@ -429,11 +429,23 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
             "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner",
           ],
         }).pipe(Effect.map((result) => JSON.parse(result.stdout) as GitHubPullRequestSummary)),
+      getPullRequestDetails: (input) =>
+        execute({
+          cwd: input.cwd,
+          args: [
+            "pr",
+            "view",
+            input.reference,
+            "--json",
+            "number,title,body,url,baseRefName,headRefName,state,reviewDecision,isDraft,comments,reviews,statusCheckRollup,latestReviews",
+          ],
+        }).pipe(Effect.map((result) => JSON.parse(result.stdout))),
       getRepositoryCloneUrls: (input) =>
         execute({
           cwd: input.cwd,
           args: ["repo", "view", input.repository, "--json", "nameWithOwner,url,sshUrl"],
         }).pipe(Effect.map((result) => JSON.parse(result.stdout))),
+      updatePullRequest: () => Effect.void,
       checkoutPullRequest: (input) =>
         execute({
           cwd: input.cwd,
@@ -451,6 +463,7 @@ function runStackedAction(
     action: "commit" | "commit_push" | "commit_push_pr";
     commitMessage?: string;
     featureBranch?: boolean;
+    defaultPullRequestBaseBranch?: string | null;
   },
 ) {
   return manager.runStackedAction(input);
@@ -1198,7 +1211,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     12_000,
   );
 
-  it.effect("creates PR when one does not already exist", () =>
+  it.effect("creates PR using the repo default base branch when one does not already exist", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
       yield* initRepo(repoDir);
@@ -1220,7 +1233,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
                 number: 88,
                 title: "Add stacked git actions",
                 url: "https://github.com/pingdotgg/codething-mvp/pull/88",
-                baseRefName: "main",
+                baseRefName: "release",
                 headRefName: "feature-create-pr",
               },
             ]),
@@ -1230,13 +1243,14 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       const result = yield* runStackedAction(manager, {
         cwd: repoDir,
         action: "commit_push_pr",
+        defaultPullRequestBaseBranch: "release",
       });
 
       expect(result.branch.status).toBe("skipped_not_requested");
       expect(result.pr.status).toBe("created");
       expect(result.pr.number).toBe(88);
       expect(
-        ghCalls.some((call) => call.includes("pr create --base main --head feature-create-pr")),
+        ghCalls.some((call) => call.includes("pr create --base release --head feature-create-pr")),
       ).toBe(true);
       expect(ghCalls.some((call) => call.startsWith("pr view "))).toBe(false);
     }),

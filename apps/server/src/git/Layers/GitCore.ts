@@ -3,6 +3,7 @@ import { Cache, Data, Duration, Effect, Exit, FileSystem, Layer, Path } from "ef
 import { GitCommandError } from "../Errors.ts";
 import { GitService } from "../Services/GitService.ts";
 import { GitCore, type GitCoreShape } from "../Services/GitCore.ts";
+import { defaultManagedWorktreePath } from "../managedWorktreePaths.ts";
 
 const STATUS_UPSTREAM_REFRESH_INTERVAL = Duration.seconds(15);
 const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(5);
@@ -740,6 +741,7 @@ const makeGitCore = Effect.gen(function* () {
       let aheadCount = 0;
       let behindCount = 0;
       let hasWorkingTreeChanges = false;
+      let hasMergeConflicts = false;
       const changedFilesWithoutNumstat = new Set<string>();
 
       for (const line of statusStdout.split(/\r?\n/g)) {
@@ -759,6 +761,9 @@ const makeGitCore = Effect.gen(function* () {
           aheadCount = parsed.ahead;
           behindCount = parsed.behind;
           continue;
+        }
+        if (line.startsWith("u ")) {
+          hasMergeConflicts = true;
         }
         if (line.trim().length > 0 && !line.startsWith("#")) {
           hasWorkingTreeChanges = true;
@@ -804,6 +809,7 @@ const makeGitCore = Effect.gen(function* () {
         branch,
         upstreamRef,
         hasWorkingTreeChanges,
+        hasMergeConflicts,
         workingTree: {
           files,
           insertions,
@@ -820,6 +826,7 @@ const makeGitCore = Effect.gen(function* () {
       Effect.map((details) => ({
         branch: details.branch,
         hasWorkingTreeChanges: details.hasWorkingTreeChanges,
+        hasMergeConflicts: details.hasMergeConflicts,
         workingTree: details.workingTree,
         hasUpstream: details.hasUpstream,
         aheadCount: details.aheadCount,
@@ -1235,10 +1242,12 @@ const makeGitCore = Effect.gen(function* () {
     Effect.gen(function* () {
       const targetBranch = input.newBranch ?? input.branch;
       const managedPathName = input.managedPathName ?? targetBranch.replace(/\//g, "-");
-      const repoName = path.basename(input.cwd);
-      const homeDir = process.env.HOME ?? process.env.USERPROFILE ?? "/tmp";
       const worktreePath =
-        input.path ?? path.join(homeDir, ".t3", "worktrees", repoName, managedPathName);
+        input.path ??
+        defaultManagedWorktreePath({
+          repoPath: input.cwd,
+          managedPathName,
+        });
       const args = input.newBranch
         ? ["worktree", "add", "-b", input.newBranch, worktreePath, input.branch]
         : ["worktree", "add", worktreePath, input.branch];

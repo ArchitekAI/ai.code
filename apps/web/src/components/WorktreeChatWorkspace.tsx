@@ -7,7 +7,15 @@ import {
   type ThreadId,
   type WorktreeId,
 } from "@repo/contracts";
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import {
   DockviewReact,
   type DockviewApi,
@@ -27,17 +35,21 @@ import OpenInPicker from "./OpenInPicker";
 import ProjectScriptsControl, { type NewProjectScriptInput } from "./ProjectScriptsControl";
 import { PROVIDER_ICON_BY_PROVIDER } from "./providerIcons";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
+import WorktreeRightRail from "./WorktreeRightRail";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { KbdTooltip } from "./ui/kbd-tooltip";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
+import { Sheet, SheetContent, SheetTitle } from "./ui/sheet";
 import { SidebarTrigger } from "./ui/sidebar";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { isElectron } from "../env";
+import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useTheme } from "../hooks/useTheme";
 import { gitBranchesQueryOptions } from "../lib/gitReactQuery";
 import { formatRelativeTime } from "../lib/relativeTime";
 import { decodeProjectScriptKeybindingRule } from "../lib/projectScriptKeybindings";
+import { isTerminalFocused } from "../lib/terminalFocus";
 import { ensureWorktreeDraftThread } from "../lib/worktreeDraftThread";
 import { worktreeDisplaySubtitle, worktreeDisplayTitle } from "../lib/worktrees";
 import { cn, newCommandId, randomUUID } from "../lib/utils";
@@ -51,7 +63,7 @@ import {
   projectScriptRuntimeEnv,
 } from "../projectScripts";
 import { useStore } from "../store";
-import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
+import { selectWorktreeTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import {
   DEFAULT_THREAD_TERMINAL_ID,
   MAX_THREAD_TERMINAL_COUNT,
@@ -60,7 +72,9 @@ import {
 import type { Worktree } from "../types";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import {
+  createDefaultWorktreeRightRailState,
   type WorktreeDockPanelParams,
+  type WorktreeRightRailState,
   sanitizeSerializedDockviewLayout,
   useWorktreeChatLayoutStore,
 } from "../worktreeChatLayoutStore";
@@ -69,6 +83,13 @@ const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "t3code:last-invoked-script-by-projec
 const DOCKVIEW_THREAD_COMPONENT = "thread-chat";
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_AVAILABLE_EDITORS: EditorId[] = [];
+const MIN_RIGHT_RAIL_WIDTH = 260;
+const MAX_RIGHT_RAIL_WIDTH = 520;
+
+function clampRightRailWidth(width: number): number {
+  const safeWidth = Number.isFinite(width) ? width : MIN_RIGHT_RAIL_WIDTH;
+  return Math.min(Math.max(Math.round(safeWidth), MIN_RIGHT_RAIL_WIDTH), MAX_RIGHT_RAIL_WIDTH);
+}
 
 declare global {
   interface Window {
@@ -322,6 +343,7 @@ export default function WorktreeChatWorkspace({
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { resolvedTheme } = useTheme();
+  const isMobile = useMediaQuery("(max-width: 767px)");
 
   const projects = useStore((store) => store.projects);
   const worktrees = useStore((store) => store.worktrees);
@@ -338,14 +360,30 @@ export default function WorktreeChatWorkspace({
     (store) => store.layoutsByWorktreeId[worktreeId] ?? null,
   );
   const setLayout = useWorktreeChatLayoutStore((store) => store.setLayout);
+  const storedRightRailState = useWorktreeChatLayoutStore(
+    (store) => store.rightRailStateByWorktreeId[worktreeId] ?? null,
+  );
+  const storeSetRightRailState = useWorktreeChatLayoutStore((store) => store.setRightRailState);
   const [dockviewApi, setDockviewApi] = useState<DockviewApi | null>(null);
   const [focusedDockThreadId, setFocusedDockThreadId] = useState<ThreadId>(threadId);
   const [terminalFocusRequestId, setTerminalFocusRequestId] = useState(0);
   const restoredRef = useRef(false);
   const pendingPanelReferenceIdRef = useRef<ThreadId | null>(null);
+  const rightRailResizeStateRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startWidth: number;
+    divider: HTMLDivElement;
+  } | null>(null);
   const [lastInvokedScriptByProjectId, setLastInvokedScriptByProjectId] = useState<
     Record<string, string>
   >(() => readLastInvokedScriptByProjectFromStorage());
+  const worktreeTerminalOwnerId = worktreeId as unknown as ThreadId;
+  const rightRailState = useMemo(
+    () => storedRightRailState ?? createDefaultWorktreeRightRailState(),
+    [storedRightRailState],
+  );
+  const rightRailWidth = clampRightRailWidth(rightRailState.width);
 
   const workspaceThreadsById = useMemo(() => {
     const next = new Map<ThreadId, WorkspaceThreadEntry>();
@@ -388,11 +426,15 @@ export default function WorktreeChatWorkspace({
     [workspaceThreadsById],
   );
   const activeThread = workspaceThreadsById.get(threadId) ?? null;
+  const focusedThread = workspaceThreadsById.get(focusedDockThreadId) ?? activeThread;
   const activeWorktree = worktrees.find((worktree) => worktree.id === worktreeId) ?? null;
   const activeProject =
     projects.find(
       (project) => project.id === (activeThread?.projectId ?? activeWorktree?.projectId),
     ) ?? null;
+  const focusedProject =
+    projects.find((project) => project.id === (focusedThread?.projectId ?? activeProject?.id)) ??
+    activeProject;
   const activeThreadId = activeThread?.threadId ?? null;
   const gitCwd =
     activeThread?.worktreePath ??
@@ -409,24 +451,25 @@ export default function WorktreeChatWorkspace({
   const isGitRepo = branchesQuery.data?.isRepo ?? true;
 
   const terminalState = useTerminalStateStore((state) =>
-    activeThreadId
-      ? selectThreadTerminalState(state.terminalStateByThreadId, activeThreadId)
-      : selectThreadTerminalState(state.terminalStateByThreadId, "" as ThreadId),
+    selectWorktreeTerminalState(state.terminalStateByWorktreeId, worktreeId),
   );
-  const storeSetTerminalOpen = useTerminalStateStore((state) => state.setTerminalOpen);
-  const storeSetTerminalHeight = useTerminalStateStore((state) => state.setTerminalHeight);
-  const storeSplitTerminal = useTerminalStateStore((state) => state.splitTerminal);
-  const storeNewTerminal = useTerminalStateStore((state) => state.newTerminal);
-  const storeSetActiveTerminal = useTerminalStateStore((state) => state.setActiveTerminal);
-  const storeCloseTerminal = useTerminalStateStore((state) => state.closeTerminal);
+  const storeSetTerminalOpen = useTerminalStateStore((state) => state.setWorktreeTerminalOpen);
+  const storeSetTerminalHeight = useTerminalStateStore((state) => state.setWorktreeTerminalHeight);
+  const storeSplitTerminal = useTerminalStateStore((state) => state.splitWorktreeTerminal);
+  const storeNewTerminal = useTerminalStateStore((state) => state.newWorktreeTerminal);
+  const storeSetActiveTerminal = useTerminalStateStore((state) => state.setActiveWorktreeTerminal);
+  const storeCloseTerminal = useTerminalStateStore((state) => state.closeWorktreeTerminal);
 
   const threadTerminalRuntimeEnv = useMemo(() => {
     if (!activeProject?.cwd) return {};
     return projectScriptRuntimeEnv({
       project: { cwd: activeProject.cwd },
-      worktreePath: activeThread?.worktreePath ?? null,
+      worktreePath:
+        (activeWorktree && !activeWorktree.isRoot ? activeWorktree.workspacePath : null) ??
+        activeThread?.worktreePath ??
+        null,
     });
-  }, [activeProject?.cwd, activeThread?.worktreePath]);
+  }, [activeProject?.cwd, activeThread?.worktreePath, activeWorktree]);
 
   const splitTerminalShortcutLabel = useMemo(
     () => shortcutLabelForCommand(keybindings, "terminal.split"),
@@ -441,66 +484,77 @@ export default function WorktreeChatWorkspace({
     [keybindings],
   );
   const hasReachedTerminalLimit = terminalState.terminalIds.length >= MAX_THREAD_TERMINAL_COUNT;
+  const setRightRailState = useCallback(
+    (
+      updater:
+        | Partial<WorktreeRightRailState>
+        | ((state: WorktreeRightRailState) => Partial<WorktreeRightRailState>),
+    ) => {
+      storeSetRightRailState(worktreeId, updater);
+    },
+    [storeSetRightRailState, worktreeId],
+  );
 
   const setTerminalOpen = useCallback(
     (open: boolean) => {
-      if (!activeThreadId) return;
-      storeSetTerminalOpen(activeThreadId, open);
+      storeSetTerminalOpen(worktreeId, open);
     },
-    [activeThreadId, storeSetTerminalOpen],
+    [storeSetTerminalOpen, worktreeId],
   );
   const setTerminalHeight = useCallback(
     (height: number) => {
-      if (!activeThreadId) return;
-      storeSetTerminalHeight(activeThreadId, height);
+      storeSetTerminalHeight(worktreeId, height);
     },
-    [activeThreadId, storeSetTerminalHeight],
+    [storeSetTerminalHeight, worktreeId],
   );
   const splitTerminal = useCallback(() => {
-    if (!activeThreadId || hasReachedTerminalLimit) return;
-    storeSplitTerminal(activeThreadId, `terminal-${randomUUID()}`);
+    if (hasReachedTerminalLimit) return;
+    storeSplitTerminal(worktreeId, `terminal-${randomUUID()}`);
     setTerminalFocusRequestId((value) => value + 1);
-  }, [activeThreadId, hasReachedTerminalLimit, storeSplitTerminal]);
+  }, [hasReachedTerminalLimit, storeSplitTerminal, worktreeId]);
   const createNewTerminal = useCallback(() => {
-    if (!activeThreadId || hasReachedTerminalLimit) return;
-    storeNewTerminal(activeThreadId, `terminal-${randomUUID()}`);
+    if (hasReachedTerminalLimit) return;
+    storeNewTerminal(worktreeId, `terminal-${randomUUID()}`);
     setTerminalFocusRequestId((value) => value + 1);
-  }, [activeThreadId, hasReachedTerminalLimit, storeNewTerminal]);
+  }, [hasReachedTerminalLimit, storeNewTerminal, worktreeId]);
   const activateTerminal = useCallback(
     (terminalId: string) => {
-      if (!activeThreadId) return;
-      storeSetActiveTerminal(activeThreadId, terminalId);
+      storeSetActiveTerminal(worktreeId, terminalId);
       setTerminalFocusRequestId((value) => value + 1);
     },
-    [activeThreadId, storeSetActiveTerminal],
+    [storeSetActiveTerminal, worktreeId],
   );
   const closeTerminal = useCallback(
     (terminalId: string) => {
       const api = readNativeApi();
-      if (!activeThreadId || !api) return;
+      if (!api) return;
       const isFinalTerminal = terminalState.terminalIds.length <= 1;
       const fallbackExitWrite = () =>
         api.terminal
-          .write({ threadId: activeThreadId, terminalId, data: "exit\n" })
+          .write({ threadId: worktreeTerminalOwnerId, terminalId, data: "exit\n" })
           .catch(() => undefined);
 
       if ("close" in api.terminal && typeof api.terminal.close === "function") {
         void (async () => {
           if (isFinalTerminal) {
             await api.terminal
-              .clear({ threadId: activeThreadId, terminalId })
+              .clear({ threadId: worktreeTerminalOwnerId, terminalId })
               .catch(() => undefined);
           }
-          await api.terminal.close({ threadId: activeThreadId, terminalId, deleteHistory: true });
+          await api.terminal.close({
+            threadId: worktreeTerminalOwnerId,
+            terminalId,
+            deleteHistory: true,
+          });
         })().catch(() => fallbackExitWrite());
       } else {
         void fallbackExitWrite();
       }
 
-      storeCloseTerminal(activeThreadId, terminalId);
+      storeCloseTerminal(worktreeId, terminalId);
       setTerminalFocusRequestId((value) => value + 1);
     },
-    [activeThreadId, storeCloseTerminal, terminalState.terminalIds.length],
+    [storeCloseTerminal, terminalState.terminalIds.length, worktreeId, worktreeTerminalOwnerId],
   );
 
   const persistProjectScripts = useCallback(
@@ -613,7 +667,7 @@ export default function WorktreeChatWorkspace({
   const runProjectScript = useCallback(
     async (script: ProjectScript) => {
       const api = readNativeApi();
-      if (!api || !activeThreadId || !activeProject || !activeThread?.isServerThread) return;
+      if (!api || !activeProject) return;
 
       setLastInvokedScriptByProjectId((current) => {
         if (current[activeProject.id] === script.id) return current;
@@ -633,10 +687,10 @@ export default function WorktreeChatWorkspace({
         : baseTerminalId;
 
       if (shouldCreateNewTerminal) {
-        storeNewTerminal(activeThreadId, targetTerminalId);
-        storeSetActiveTerminal(activeThreadId, targetTerminalId);
+        storeNewTerminal(worktreeId, targetTerminalId);
+        storeSetActiveTerminal(worktreeId, targetTerminalId);
       } else if (targetTerminalId !== terminalState.activeTerminalId) {
-        storeSetActiveTerminal(activeThreadId, targetTerminalId);
+        storeSetActiveTerminal(worktreeId, targetTerminalId);
       }
 
       setTerminalOpen(true);
@@ -644,26 +698,27 @@ export default function WorktreeChatWorkspace({
 
       try {
         await api.terminal.open({
-          threadId: activeThreadId,
+          threadId: worktreeTerminalOwnerId,
           terminalId: targetTerminalId,
           cwd: targetCwd,
           env: threadTerminalRuntimeEnv,
         });
         await api.terminal.write({
-          threadId: activeThreadId,
+          threadId: worktreeTerminalOwnerId,
           terminalId: targetTerminalId,
           data: `${script.command}\r`,
         });
       } catch (error) {
-        setStoreThreadError(
-          activeThreadId,
-          error instanceof Error ? error.message : `Failed to run script "${script.name}".`,
-        );
+        if (activeThreadId) {
+          setStoreThreadError(
+            activeThreadId,
+            error instanceof Error ? error.message : `Failed to run script "${script.name}".`,
+          );
+        }
       }
     },
     [
       activeProject,
-      activeThread?.isServerThread,
       activeThreadId,
       gitCwd,
       setStoreThreadError,
@@ -674,7 +729,78 @@ export default function WorktreeChatWorkspace({
       terminalState.runningTerminalIds,
       terminalState.terminalIds,
       threadTerminalRuntimeEnv,
+      worktreeId,
+      worktreeTerminalOwnerId,
     ],
+  );
+
+  useEffect(() => {
+    if (rightRailState.width === rightRailWidth) {
+      return;
+    }
+    setRightRailState({ width: rightRailWidth });
+  }, [rightRailState.width, rightRailWidth, setRightRailState]);
+
+  const stopRightRailResize = useCallback((pointerId: number) => {
+    const resizeState = rightRailResizeStateRef.current;
+    if (!resizeState) {
+      return;
+    }
+    rightRailResizeStateRef.current = null;
+    document.body.style.cursor = "";
+    if (resizeState.divider.hasPointerCapture(pointerId)) {
+      resizeState.divider.releasePointerCapture(pointerId);
+    }
+  }, []);
+
+  const handleRightRailResizePointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (isMobile || !rightRailState.open) {
+        return;
+      }
+      event.preventDefault();
+      rightRailResizeStateRef.current = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startWidth: rightRailWidth,
+        divider: event.currentTarget,
+      };
+      event.currentTarget.setPointerCapture(event.pointerId);
+      document.body.style.cursor = "col-resize";
+    },
+    [isMobile, rightRailState.open, rightRailWidth],
+  );
+
+  const handleRightRailResizePointerMove = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const resizeState = rightRailResizeStateRef.current;
+      if (!resizeState || resizeState.pointerId !== event.pointerId) {
+        return;
+      }
+      const nextWidth = clampRightRailWidth(
+        resizeState.startWidth + (resizeState.startX - event.clientX),
+      );
+      setRightRailState({ width: nextWidth });
+    },
+    [setRightRailState],
+  );
+
+  const handleRightRailResizePointerUp = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const resizeState = rightRailResizeStateRef.current;
+      if (!resizeState || resizeState.pointerId !== event.pointerId) {
+        return;
+      }
+      stopRightRailResize(event.pointerId);
+    },
+    [stopRightRailResize],
+  );
+
+  useEffect(
+    () => () => {
+      document.body.style.cursor = "";
+    },
+    [],
   );
 
   useEffect(() => {
@@ -992,15 +1118,8 @@ export default function WorktreeChatWorkspace({
   }, [dockviewApi]);
 
   useEffect(() => {
-    const isTerminalFocused = (): boolean => {
-      const activeElement = document.activeElement;
-      if (!(activeElement instanceof HTMLElement)) return false;
-      if (activeElement.classList.contains("xterm-helper-textarea")) return true;
-      return activeElement.closest(".thread-terminal-drawer .xterm") !== null;
-    };
-
     const handler = (event: globalThis.KeyboardEvent) => {
-      if (!activeThreadId || event.defaultPrevented) return;
+      if (event.defaultPrevented) return;
       const command = resolveShortcutCommand(event, keybindings, {
         context: {
           terminalFocus: isTerminalFocused(),
@@ -1119,32 +1238,80 @@ export default function WorktreeChatWorkspace({
               />
             ) : null}
             {activeProject?.name ? (
-              <GitActionsControl gitCwd={gitCwd} activeThreadId={activeThreadId} />
+              <GitActionsControl
+                gitCwd={gitCwd}
+                activeThreadId={activeThreadId}
+                defaultPullRequestBaseBranch={activeProject?.defaultPullRequestBaseBranch ?? null}
+              />
+            ) : null}
+            {activeProject?.name ? (
+              <Button
+                size="sm"
+                variant={rightRailState.open ? "secondary" : "outline"}
+                onClick={() => {
+                  setRightRailState({ open: !rightRailState.open });
+                }}
+              >
+                {rightRailState.open ? "Hide sidebar" : "Show sidebar"}
+              </Button>
             ) : null}
           </div>
         </div>
       </header>
 
       <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
-        <DockviewReact
-          className="h-full w-full"
-          components={dockComponents}
-          defaultRenderer="always"
-          defaultTabComponent={DockThreadTab}
-          disableFloatingGroups
-          rightHeaderActionsComponent={rightHeaderActionsComponent}
-          scrollbars="native"
-          theme={resolvedTheme === "dark" ? themeDark : themeLight}
-          onReady={(event: DockviewReadyEvent) => {
-            setDockviewApi(event.api);
-          }}
-        />
+        <div className="flex h-full min-h-0 min-w-0 overflow-hidden">
+          <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+            <DockviewReact
+              className="h-full w-full"
+              components={dockComponents}
+              defaultRenderer="always"
+              defaultTabComponent={DockThreadTab}
+              disableFloatingGroups
+              rightHeaderActionsComponent={rightHeaderActionsComponent}
+              scrollbars="native"
+              theme={resolvedTheme === "dark" ? themeDark : themeLight}
+              onReady={(event: DockviewReadyEvent) => {
+                setDockviewApi(event.api);
+              }}
+            />
+          </div>
+
+          {!isMobile && rightRailState.open ? (
+            <>
+              <div
+                aria-hidden="true"
+                className="w-1 shrink-0 cursor-col-resize bg-border/50 transition-colors hover:bg-border"
+                onPointerDown={handleRightRailResizePointerDown}
+                onPointerMove={handleRightRailResizePointerMove}
+                onPointerUp={handleRightRailResizePointerUp}
+                onPointerCancel={handleRightRailResizePointerUp}
+              />
+              <div
+                className="min-h-0 shrink-0 overflow-hidden"
+                style={{ width: `${rightRailWidth}px` }}
+              >
+                <WorktreeRightRail
+                  worktreeId={worktreeId}
+                  cwd={gitCwd}
+                  projectId={focusedProject?.id ?? null}
+                  projectModel={focusedProject?.model ?? null}
+                  focusedThreadId={focusedThread?.threadId ?? null}
+                  focusedThreadIsServer={focusedThread?.isServerThread ?? false}
+                  railState={rightRailState}
+                  setRailState={setRightRailState}
+                  onClose={() => setRightRailState({ open: false })}
+                />
+              </div>
+            </>
+          ) : null}
+        </div>
       </div>
 
-      {terminalState.terminalOpen && activeProject && activeThreadId ? (
+      {terminalState.terminalOpen && activeProject ? (
         <ThreadTerminalDrawer
-          key={activeThreadId}
-          threadId={activeThreadId}
+          key={worktreeId}
+          threadId={worktreeTerminalOwnerId}
           cwd={gitCwd ?? activeProject.cwd}
           runtimeEnv={threadTerminalRuntimeEnv}
           height={terminalState.terminalHeight}
@@ -1162,6 +1329,36 @@ export default function WorktreeChatWorkspace({
           onCloseTerminal={closeTerminal}
           onHeightChange={setTerminalHeight}
         />
+      ) : null}
+
+      {isMobile ? (
+        <Sheet
+          open={rightRailState.open}
+          onOpenChange={(open) => {
+            setRightRailState({ open });
+          }}
+        >
+          <SheetContent
+            side="right"
+            showCloseButton={false}
+            className="w-[min(92vw,420px)] max-w-[420px] p-0"
+          >
+            <SheetTitle className="sr-only">Worktree sidebar</SheetTitle>
+            <div className="h-full min-h-0">
+              <WorktreeRightRail
+                worktreeId={worktreeId}
+                cwd={gitCwd}
+                projectId={focusedProject?.id ?? null}
+                projectModel={focusedProject?.model ?? null}
+                focusedThreadId={focusedThread?.threadId ?? null}
+                focusedThreadIsServer={focusedThread?.isServerThread ?? false}
+                railState={rightRailState}
+                setRailState={setRightRailState}
+                onClose={() => setRightRailState({ open: false })}
+              />
+            </div>
+          </SheetContent>
+        </Sheet>
       ) : null}
 
       {!activeThread && (

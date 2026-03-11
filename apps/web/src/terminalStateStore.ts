@@ -1,11 +1,11 @@
 /**
- * Single Zustand store for terminal UI state keyed by threadId.
+ * Single Zustand store for terminal UI state keyed by threadId or worktreeId.
  *
  * Terminal transition helpers are intentionally private to keep the public
  * API constrained to store actions/selectors.
  */
 
-import type { ThreadId } from "@repo/contracts";
+import type { ThreadId, WorktreeId } from "@repo/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import {
@@ -436,37 +436,52 @@ export function selectThreadTerminalState(
   return terminalStateByThreadId[threadId] ?? getDefaultThreadTerminalState();
 }
 
-function updateTerminalStateByThreadId(
-  terminalStateByThreadId: Record<ThreadId, ThreadTerminalState>,
-  threadId: ThreadId,
+export function selectWorktreeTerminalState(
+  terminalStateByWorktreeId: Record<WorktreeId, ThreadTerminalState>,
+  worktreeId: WorktreeId,
+): ThreadTerminalState {
+  if (worktreeId.length === 0) {
+    return getDefaultThreadTerminalState();
+  }
+  return terminalStateByWorktreeId[worktreeId] ?? getDefaultThreadTerminalState();
+}
+
+function updateTerminalStateByOwnerId<TOwnerId extends string>(
+  terminalStateByOwnerId: Record<TOwnerId, ThreadTerminalState>,
+  ownerId: TOwnerId,
+  selectState: (
+    stateByOwnerId: Record<TOwnerId, ThreadTerminalState>,
+    ownerId: TOwnerId,
+  ) => ThreadTerminalState,
   updater: (state: ThreadTerminalState) => ThreadTerminalState,
-): Record<ThreadId, ThreadTerminalState> {
-  if (threadId.length === 0) {
-    return terminalStateByThreadId;
+): Record<TOwnerId, ThreadTerminalState> {
+  if (ownerId.length === 0) {
+    return terminalStateByOwnerId;
   }
 
-  const current = selectThreadTerminalState(terminalStateByThreadId, threadId);
+  const current = selectState(terminalStateByOwnerId, ownerId);
   const next = updater(current);
   if (next === current) {
-    return terminalStateByThreadId;
+    return terminalStateByOwnerId;
   }
 
   if (isDefaultThreadTerminalState(next)) {
-    if (terminalStateByThreadId[threadId] === undefined) {
-      return terminalStateByThreadId;
+    if (terminalStateByOwnerId[ownerId] === undefined) {
+      return terminalStateByOwnerId;
     }
-    const { [threadId]: _removed, ...rest } = terminalStateByThreadId;
-    return rest as Record<ThreadId, ThreadTerminalState>;
+    const { [ownerId]: _removed, ...rest } = terminalStateByOwnerId;
+    return rest as Record<TOwnerId, ThreadTerminalState>;
   }
 
   return {
-    ...terminalStateByThreadId,
-    [threadId]: next,
+    ...terminalStateByOwnerId,
+    [ownerId]: next,
   };
 }
 
 interface TerminalStateStoreState {
   terminalStateByThreadId: Record<ThreadId, ThreadTerminalState>;
+  terminalStateByWorktreeId: Record<WorktreeId, ThreadTerminalState>;
   setTerminalOpen: (threadId: ThreadId, open: boolean) => void;
   setTerminalHeight: (threadId: ThreadId, height: number) => void;
   splitTerminal: (threadId: ThreadId, terminalId: string) => void;
@@ -480,19 +495,33 @@ interface TerminalStateStoreState {
   ) => void;
   clearTerminalState: (threadId: ThreadId) => void;
   removeOrphanedTerminalStates: (activeThreadIds: Set<ThreadId>) => void;
+  setWorktreeTerminalOpen: (worktreeId: WorktreeId, open: boolean) => void;
+  setWorktreeTerminalHeight: (worktreeId: WorktreeId, height: number) => void;
+  splitWorktreeTerminal: (worktreeId: WorktreeId, terminalId: string) => void;
+  newWorktreeTerminal: (worktreeId: WorktreeId, terminalId: string) => void;
+  setActiveWorktreeTerminal: (worktreeId: WorktreeId, terminalId: string) => void;
+  closeWorktreeTerminal: (worktreeId: WorktreeId, terminalId: string) => void;
+  setWorktreeTerminalActivity: (
+    worktreeId: WorktreeId,
+    terminalId: string,
+    hasRunningSubprocess: boolean,
+  ) => void;
+  clearWorktreeTerminalState: (worktreeId: WorktreeId) => void;
+  removeOrphanedWorktreeTerminalStates: (activeWorktreeIds: Set<WorktreeId>) => void;
 }
 
 export const useTerminalStateStore = create<TerminalStateStoreState>()(
   persist(
     (set) => {
-      const updateTerminal = (
+      const updateThreadTerminal = (
         threadId: ThreadId,
         updater: (state: ThreadTerminalState) => ThreadTerminalState,
       ) => {
         set((state) => {
-          const nextTerminalStateByThreadId = updateTerminalStateByThreadId(
+          const nextTerminalStateByThreadId = updateTerminalStateByOwnerId(
             state.terminalStateByThreadId,
             threadId,
+            selectThreadTerminalState,
             updater,
           );
           if (nextTerminalStateByThreadId === state.terminalStateByThreadId) {
@@ -504,26 +533,47 @@ export const useTerminalStateStore = create<TerminalStateStoreState>()(
         });
       };
 
+      const updateWorktreeTerminal = (
+        worktreeId: WorktreeId,
+        updater: (state: ThreadTerminalState) => ThreadTerminalState,
+      ) => {
+        set((state) => {
+          const nextTerminalStateByWorktreeId = updateTerminalStateByOwnerId(
+            state.terminalStateByWorktreeId,
+            worktreeId,
+            selectWorktreeTerminalState,
+            updater,
+          );
+          if (nextTerminalStateByWorktreeId === state.terminalStateByWorktreeId) {
+            return state;
+          }
+          return {
+            terminalStateByWorktreeId: nextTerminalStateByWorktreeId,
+          };
+        });
+      };
+
       return {
         terminalStateByThreadId: {},
+        terminalStateByWorktreeId: {},
         setTerminalOpen: (threadId, open) =>
-          updateTerminal(threadId, (state) => setThreadTerminalOpen(state, open)),
+          updateThreadTerminal(threadId, (state) => setThreadTerminalOpen(state, open)),
         setTerminalHeight: (threadId, height) =>
-          updateTerminal(threadId, (state) => setThreadTerminalHeight(state, height)),
+          updateThreadTerminal(threadId, (state) => setThreadTerminalHeight(state, height)),
         splitTerminal: (threadId, terminalId) =>
-          updateTerminal(threadId, (state) => splitThreadTerminal(state, terminalId)),
+          updateThreadTerminal(threadId, (state) => splitThreadTerminal(state, terminalId)),
         newTerminal: (threadId, terminalId) =>
-          updateTerminal(threadId, (state) => newThreadTerminal(state, terminalId)),
+          updateThreadTerminal(threadId, (state) => newThreadTerminal(state, terminalId)),
         setActiveTerminal: (threadId, terminalId) =>
-          updateTerminal(threadId, (state) => setThreadActiveTerminal(state, terminalId)),
+          updateThreadTerminal(threadId, (state) => setThreadActiveTerminal(state, terminalId)),
         closeTerminal: (threadId, terminalId) =>
-          updateTerminal(threadId, (state) => closeThreadTerminal(state, terminalId)),
+          updateThreadTerminal(threadId, (state) => closeThreadTerminal(state, terminalId)),
         setTerminalActivity: (threadId, terminalId, hasRunningSubprocess) =>
-          updateTerminal(threadId, (state) =>
+          updateThreadTerminal(threadId, (state) =>
             setThreadTerminalActivity(state, terminalId, hasRunningSubprocess),
           ),
         clearTerminalState: (threadId) =>
-          updateTerminal(threadId, () => createDefaultThreadTerminalState()),
+          updateThreadTerminal(threadId, () => createDefaultThreadTerminalState()),
         removeOrphanedTerminalStates: (activeThreadIds) =>
           set((state) => {
             const orphanedIds = Object.keys(state.terminalStateByThreadId).filter(
@@ -536,15 +586,63 @@ export const useTerminalStateStore = create<TerminalStateStoreState>()(
             }
             return { terminalStateByThreadId: next };
           }),
+        setWorktreeTerminalOpen: (worktreeId, open) =>
+          updateWorktreeTerminal(worktreeId, (state) => setThreadTerminalOpen(state, open)),
+        setWorktreeTerminalHeight: (worktreeId, height) =>
+          updateWorktreeTerminal(worktreeId, (state) => setThreadTerminalHeight(state, height)),
+        splitWorktreeTerminal: (worktreeId, terminalId) =>
+          updateWorktreeTerminal(worktreeId, (state) => splitThreadTerminal(state, terminalId)),
+        newWorktreeTerminal: (worktreeId, terminalId) =>
+          updateWorktreeTerminal(worktreeId, (state) => newThreadTerminal(state, terminalId)),
+        setActiveWorktreeTerminal: (worktreeId, terminalId) =>
+          updateWorktreeTerminal(worktreeId, (state) => setThreadActiveTerminal(state, terminalId)),
+        closeWorktreeTerminal: (worktreeId, terminalId) =>
+          updateWorktreeTerminal(worktreeId, (state) => closeThreadTerminal(state, terminalId)),
+        setWorktreeTerminalActivity: (worktreeId, terminalId, hasRunningSubprocess) =>
+          updateWorktreeTerminal(worktreeId, (state) =>
+            setThreadTerminalActivity(state, terminalId, hasRunningSubprocess),
+          ),
+        clearWorktreeTerminalState: (worktreeId) =>
+          updateWorktreeTerminal(worktreeId, () => createDefaultThreadTerminalState()),
+        removeOrphanedWorktreeTerminalStates: (activeWorktreeIds) =>
+          set((state) => {
+            const orphanedIds = Object.keys(state.terminalStateByWorktreeId).filter(
+              (id) => !activeWorktreeIds.has(id as WorktreeId),
+            );
+            if (orphanedIds.length === 0) return state;
+            const next = { ...state.terminalStateByWorktreeId };
+            for (const id of orphanedIds) {
+              delete next[id as WorktreeId];
+            }
+            return { terminalStateByWorktreeId: next };
+          }),
       };
     },
     {
       name: TERMINAL_STATE_STORAGE_KEY,
-      version: 1,
+      version: 2,
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
         terminalStateByThreadId: state.terminalStateByThreadId,
+        terminalStateByWorktreeId: state.terminalStateByWorktreeId,
       }),
+      migrate: (persistedState) => {
+        if (!persistedState || typeof persistedState !== "object") {
+          return {
+            terminalStateByThreadId: {},
+            terminalStateByWorktreeId: {},
+          } as Partial<TerminalStateStoreState>;
+        }
+
+        const value = persistedState as {
+          terminalStateByThreadId?: Record<ThreadId, ThreadTerminalState>;
+          terminalStateByWorktreeId?: Record<WorktreeId, ThreadTerminalState>;
+        };
+        return {
+          terminalStateByThreadId: value.terminalStateByThreadId ?? {},
+          terminalStateByWorktreeId: value.terminalStateByWorktreeId ?? {},
+        } as Partial<TerminalStateStoreState>;
+      },
     },
   ),
 );

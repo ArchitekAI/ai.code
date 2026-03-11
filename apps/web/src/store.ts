@@ -144,9 +144,12 @@ function mapProjectsFromReadModel(
       id: project.id,
       name: project.title,
       cwd: project.workspaceRoot,
+      managedWorktreeRoot: project.managedWorktreeRoot,
       model:
         existing?.model ??
         resolveModelSlug(project.defaultModel ?? DEFAULT_MODEL_BY_PROVIDER.codex),
+      defaultWorktreeBaseBranch: project.defaultWorktreeBaseBranch,
+      defaultPullRequestBaseBranch: project.defaultPullRequestBaseBranch,
       expanded:
         existing?.expanded ??
         (persistedExpandedProjectCwds.size > 0

@@ -5,6 +5,8 @@ import { runProcess } from "./processRunner";
 
 import {
   ProjectEntry,
+  ProjectListEntriesInput,
+  ProjectListEntriesResult,
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
 } from "@repo/contracts";
@@ -412,6 +414,16 @@ async function getWorkspaceIndex(cwd: string): Promise<WorkspaceIndex> {
 export function clearWorkspaceIndexCache(cwd: string): void {
   workspaceIndexCache.delete(cwd);
   inFlightWorkspaceIndexBuilds.delete(cwd);
+}
+
+export async function listWorkspaceEntries(
+  input: ProjectListEntriesInput,
+): Promise<ProjectListEntriesResult> {
+  const index = await getWorkspaceIndex(input.cwd);
+  return {
+    entries: index.entries,
+    truncated: index.truncated,
+  };
 }
 
 export async function searchWorkspaceEntries(

@@ -79,7 +79,10 @@ export interface Project {
   id: ProjectId;
   name: string;
   cwd: string;
+  managedWorktreeRoot: string;
   model: string;
+  defaultWorktreeBaseBranch: string | null;
+  defaultPullRequestBaseBranch: string | null;
   expanded: boolean;
   scripts: ProjectScript[];
 }

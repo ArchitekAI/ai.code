@@ -31,6 +31,7 @@ import {
   ThreadTurnDiffCompletedPayload,
 } from "./Schemas.ts";
 import { deriveWorktreeIdFromLegacyThread } from "./worktrees.ts";
+import { managedWorktreeRootForRepoPath } from "../git/managedWorktreePaths.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "worktreeId">>;
 type WorktreePatch = Partial<Omit<OrchestrationWorktree, "id" | "projectId" | "isRoot">>;
@@ -200,7 +201,10 @@ export function projectEvent(
             id: payload.projectId,
             title: payload.title,
             workspaceRoot: payload.workspaceRoot,
+            managedWorktreeRoot: managedWorktreeRootForRepoPath(payload.workspaceRoot),
             defaultModel: payload.defaultModel,
+            defaultWorktreeBaseBranch: payload.defaultWorktreeBaseBranch,
+            defaultPullRequestBaseBranch: payload.defaultPullRequestBaseBranch,
             scripts: payload.scripts,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
@@ -228,10 +232,19 @@ export function projectEvent(
                   ...project,
                   ...(payload.title !== undefined ? { title: payload.title } : {}),
                   ...(payload.workspaceRoot !== undefined
-                    ? { workspaceRoot: payload.workspaceRoot }
+                    ? {
+                        workspaceRoot: payload.workspaceRoot,
+                        managedWorktreeRoot: managedWorktreeRootForRepoPath(payload.workspaceRoot),
+                      }
                     : {}),
                   ...(payload.defaultModel !== undefined
                     ? { defaultModel: payload.defaultModel }
+                    : {}),
+                  ...(payload.defaultWorktreeBaseBranch !== undefined
+                    ? { defaultWorktreeBaseBranch: payload.defaultWorktreeBaseBranch }
+                    : {}),
+                  ...(payload.defaultPullRequestBaseBranch !== undefined
+                    ? { defaultPullRequestBaseBranch: payload.defaultPullRequestBaseBranch }
                     : {}),
                   ...(payload.scripts !== undefined ? { scripts: payload.scripts } : {}),
                   updatedAt: payload.updatedAt,
