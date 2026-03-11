@@ -627,15 +627,15 @@ export default function WorktreeRightRail({
       }}
       className="flex h-full min-h-0 min-w-0 flex-col gap-0 border-l border-border/70 bg-card/50"
     >
-      <div className="flex h-11 shrink-0 items-center justify-between border-b border-border/60 px-2">
+      <div className="flex h-9 shrink-0 items-center justify-between border-b border-border/60 px-2">
         <TabsList aria-label="Right rail sections" className="min-w-0 gap-1 bg-transparent p-0">
-          <TabsTrigger value="all-files" className="h-auto flex-none px-2 py-1 text-sm">
+          <TabsTrigger value="all-files" className="h-6 flex-none px-1.5 py-0 text-xs">
             All files
           </TabsTrigger>
-          <TabsTrigger value="changes" className="h-auto flex-none px-2 py-1 text-sm">
+          <TabsTrigger value="changes" className="h-6 flex-none px-1.5 py-0 text-xs">
             Changes {changesEntries.length > 0 ? changesEntries.length : ""}
           </TabsTrigger>
-          <TabsTrigger value="checks" className="h-auto flex-none px-2 py-1 text-sm">
+          <TabsTrigger value="checks" className="h-6 flex-none px-1.5 py-0 text-xs">
             Checks
           </TabsTrigger>
         </TabsList>
@@ -648,7 +648,7 @@ export default function WorktreeRightRail({
                 size="icon-xs"
                 variant="ghost"
                 className={cn(
-                  "size-5 rounded-sm text-muted-foreground hover:text-foreground",
+                  "size-4.5 rounded-sm text-muted-foreground hover:text-foreground",
                   activeExplorerViewMode === "tree"
                     ? "bg-accent text-foreground"
                     : "bg-transparent",
@@ -669,7 +669,7 @@ export default function WorktreeRightRail({
                 size="icon-xs"
                 variant="ghost"
                 className={cn(
-                  "size-5 rounded-sm text-muted-foreground hover:text-foreground",
+                  "size-4.5 rounded-sm text-muted-foreground hover:text-foreground",
                   activeExplorerViewMode === "list"
                     ? "bg-accent text-foreground"
                     : "bg-transparent",
@@ -686,7 +686,13 @@ export default function WorktreeRightRail({
               </Button>
             </Fragment>
           ) : null}
-          <Button size="icon-xs" variant="ghost" aria-label="Close right rail" onClick={onClose}>
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            className="size-4.5 rounded-sm"
+            aria-label="Close right rail"
+            onClick={onClose}
+          >
             <PanelRightCloseIcon className="size-3.5" />
           </Button>
         </div>
