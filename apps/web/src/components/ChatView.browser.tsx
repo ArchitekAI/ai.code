@@ -29,6 +29,8 @@ import { estimateTimelineMessageHeight } from "./timelineHeight";
 
 const THREAD_ID = "thread-browser-test" as ThreadId;
 const SECOND_THREAD_ID = "thread-browser-test-2" as ThreadId;
+const SECOND_WORKTREE_ID = "worktree-2" as WorktreeId;
+const SECOND_WORKTREE_THREAD_ID = "thread-browser-test-worktree-2" as ThreadId;
 const UUID_ROUTE_RE = /^\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const PROJECT_ID = "project-1" as ProjectId;
 const WORKTREE_ID = "worktree-1" as WorktreeId;
@@ -339,6 +341,82 @@ function createSnapshotWithSecondThread(): OrchestrationReadModel {
         ? Object.assign({}, thread, { title: "Second thread" })
         : thread,
     ),
+  };
+}
+
+function createSnapshotWithRunningThread(): OrchestrationReadModel {
+  const snapshot = createSnapshotForTargetUser({
+    targetMessageId: "msg-user-running-target" as MessageId,
+    targetText: "running thread",
+  });
+
+  return {
+    ...snapshot,
+    threads: snapshot.threads.map((thread) =>
+      thread.id === THREAD_ID
+        ? Object.assign({}, thread, {
+            session: {
+              ...thread.session,
+              status: "running" as const,
+              activeTurnId: "turn-running" as never,
+            },
+          })
+        : thread,
+    ),
+  };
+}
+
+function createSnapshotWithSecondaryWorktreeRunningThread(): OrchestrationReadModel {
+  const snapshot = createSnapshotForTargetUser({
+    targetMessageId: "msg-user-secondary-worktree-target" as MessageId,
+    targetText: "secondary worktree",
+  });
+
+  return {
+    ...snapshot,
+    worktrees: [
+      ...snapshot.worktrees,
+      {
+        id: SECOND_WORKTREE_ID,
+        projectId: PROJECT_ID,
+        workspacePath: "/repo/project/silent-fern-ridge",
+        branch: "feature/silent-fern-ridge",
+        isRoot: false,
+        branchRenamePending: false,
+        createdAt: isoAt(10),
+        updatedAt: isoAt(10),
+        archivedAt: null,
+        deletedAt: null,
+      },
+    ],
+    threads: [
+      ...snapshot.threads,
+      {
+        id: SECOND_WORKTREE_THREAD_ID,
+        worktreeId: SECOND_WORKTREE_ID,
+        title: "Secondary worktree thread",
+        model: "gpt-5",
+        interactionMode: "default",
+        runtimeMode: "full-access",
+        latestTurn: null,
+        createdAt: isoAt(11),
+        updatedAt: isoAt(11),
+        deletedAt: null,
+        messages: [],
+        activities: [],
+        proposedPlans: [],
+        checkpoints: [],
+        session: {
+          threadId: SECOND_WORKTREE_THREAD_ID,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: "turn-secondary-running" as never,
+          lastError: null,
+          updatedAt: isoAt(11),
+        },
+      },
+    ],
   };
 }
 
@@ -1203,6 +1281,85 @@ describe("ChatView timeline estimator parity (full app)", () => {
             [THREAD_ID, SECOND_THREAD_ID].toSorted(),
           );
           expect(api.activePanel?.id).toBe(SECOND_THREAD_ID);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows a shared status dot on dock tabs for server threads", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithRunningThread(),
+    });
+
+    try {
+      await waitForDockviewApi();
+      await vi.waitFor(
+        () => {
+          const status = document.querySelector(
+            `[data-dock-thread-status="working"][data-thread-id="${THREAD_ID}"]`,
+          );
+          expect(status).toBeTruthy();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("does not show a dock-tab status dot for draft threads", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-draft-dot-test" as MessageId,
+        targetText: "draft dot test",
+      }),
+    });
+
+    try {
+      const newThreadButton = page.getByTestId("new-thread-button");
+      await expect.element(newThreadButton).toBeInTheDocument();
+      await newThreadButton.click();
+
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a new draft thread UUID.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+
+      await waitForDockviewApi();
+      await vi.waitFor(
+        () => {
+          expect(
+            document.querySelector(`[data-dock-thread-status][data-thread-id="${newThreadId}"]`),
+          ).toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("replaces the worktree subtitle with status when a worktree has one", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithSecondaryWorktreeRunningThread(),
+    });
+
+    try {
+      await vi.waitFor(
+        () => {
+          const status = document.querySelector(
+            `[data-worktree-status="working"][data-worktree-id="${SECOND_WORKTREE_ID}"]`,
+          );
+          expect(status?.textContent).toContain("Working");
+          expect(document.body.textContent).not.toContain("silent-fern-ridge");
         },
         { timeout: 8_000, interval: 16 },
       );

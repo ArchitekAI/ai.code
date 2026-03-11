@@ -51,6 +51,7 @@ import { gitBranchesQueryOptions } from "../lib/gitReactQuery";
 import { formatRelativeTime } from "../lib/relativeTime";
 import { decodeProjectScriptKeybindingRule } from "../lib/projectScriptKeybindings";
 import { sendWorktreeThreadPrompt } from "../lib/sendWorktreeThreadPrompt";
+import { resolveThreadStatusVisual } from "../lib/threadStatus";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { ensureWorktreeDraftThread } from "../lib/worktreeDraftThread";
 import { worktreeDisplaySubtitle, worktreeDisplayTitle } from "../lib/worktrees";
@@ -218,12 +219,29 @@ function DockThreadTab(props: IDockviewPanelHeaderProps<WorktreeDockPanelParams>
 
   const provider: ProviderKind = serverThread?.session?.provider ?? draftProvider ?? "codex";
   const ProviderIcon = PROVIDER_ICON_BY_PROVIDER[provider];
+  const threadStatus = serverThread ? resolveThreadStatusVisual(serverThread) : null;
 
   return (
     <div className="dv-default-tab">
       <div className="dv-default-tab-content">
         <span className="flex min-w-0 items-center gap-1.5">
           <ProviderIcon aria-hidden="true" className="size-3 shrink-0 opacity-75" />
+          {threadStatus ? (
+            <span
+              aria-label={threadStatus.label}
+              className="inline-flex shrink-0"
+              data-dock-thread-status={threadStatus.kind}
+              data-thread-id={props.params.threadId}
+              title={threadStatus.label}
+            >
+              <span
+                aria-hidden="true"
+                className={`h-1.5 w-1.5 rounded-full ${threadStatus.dotClass} ${
+                  threadStatus.pulse ? "animate-pulse" : ""
+                }`}
+              />
+            </span>
+          ) : null}
           <span className="truncate">{title}</span>
         </span>
       </div>
@@ -1396,6 +1414,7 @@ export default function WorktreeChatWorkspace({
                   cwd={gitCwd}
                   projectId={focusedProject?.id ?? null}
                   projectModel={focusedProject?.model ?? null}
+                  defaultPullRequestBaseBranch={activeProject?.defaultPullRequestBaseBranch ?? null}
                   focusedThreadId={focusedThread?.threadId ?? null}
                   focusedThreadIsServer={focusedThread?.isServerThread ?? false}
                   railState={rightRailState}
@@ -1427,6 +1446,7 @@ export default function WorktreeChatWorkspace({
                 cwd={gitCwd}
                 projectId={focusedProject?.id ?? null}
                 projectModel={focusedProject?.model ?? null}
+                defaultPullRequestBaseBranch={activeProject?.defaultPullRequestBaseBranch ?? null}
                 focusedThreadId={focusedThread?.threadId ?? null}
                 focusedThreadIsServer={focusedThread?.isServerThread ?? false}
                 railState={rightRailState}

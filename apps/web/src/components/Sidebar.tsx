@@ -47,7 +47,6 @@ import { isMacPlatform, newCommandId, newProjectId } from "../lib/utils";
 import { isNewThreadShortcut } from "../newThreadShortcut";
 import { useStore } from "../store";
 import { resolveShortcutCommand, shortcutKbdSequenceForCommand } from "../keybindings";
-import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
 import {
   gitArchiveWorktreeMutationOptions,
   gitBranchesQueryOptions,
@@ -97,11 +96,12 @@ import {
 } from "./ui/sidebar";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { isNonEmpty as isNonEmptyString } from "effect/String";
+import { resolveWorktreeDiffStat, shouldClearThreadSelectionOnMouseDown } from "./Sidebar.logic";
 import {
-  resolveThreadStatusPill,
-  resolveWorktreeDiffStat,
-  shouldClearThreadSelectionOnMouseDown,
-} from "./Sidebar.logic";
+  getThreadStatusVisual,
+  resolveThreadStatusVisual,
+  resolveWorktreeStatusKind,
+} from "../lib/threadStatus";
 import {
   createManagedWorktreeSeed,
   findRootWorktree,
@@ -386,20 +386,6 @@ export default function Sidebar() {
       (isMacPlatform(navigator.platform) ? ["Command", "Shift", "A"] : ["Ctrl", "Shift", "A"]),
     [keybindings],
   );
-  const pendingApprovalByThreadId = useMemo(() => {
-    const map = new Map<ThreadId, boolean>();
-    for (const thread of threads) {
-      map.set(thread.id, derivePendingApprovals(thread.activities).length > 0);
-    }
-    return map;
-  }, [threads]);
-  const pendingUserInputByThreadId = useMemo(() => {
-    const map = new Map<ThreadId, boolean>();
-    for (const thread of threads) {
-      map.set(thread.id, derivePendingUserInputs(thread.activities).length > 0);
-    }
-    return map;
-  }, [threads]);
   const projectCwdById = useMemo(
     () => new Map(projects.map((project) => [project.id, project.cwd] as const)),
     [projects],
@@ -480,6 +466,27 @@ export default function Sidebar() {
     }
     return map;
   }, [gitStatusByCwd, worktreeGitTargets]);
+  const worktreeStatusById = useMemo(() => {
+    const threadsByWorktreeId = new Map<WorktreeId, typeof threads>();
+    for (const thread of threads) {
+      if (!thread.worktreeId) {
+        continue;
+      }
+      const existing = threadsByWorktreeId.get(thread.worktreeId);
+      if (existing) {
+        existing.push(thread);
+      } else {
+        threadsByWorktreeId.set(thread.worktreeId, [thread]);
+      }
+    }
+
+    const map = new Map<WorktreeId, ReturnType<typeof getThreadStatusVisual> | null>();
+    for (const worktree of worktrees) {
+      const kind = resolveWorktreeStatusKind(threadsByWorktreeId.get(worktree.id) ?? []);
+      map.set(worktree.id, kind ? getThreadStatusVisual(kind) : null);
+    }
+    return map;
+  }, [threads, worktrees]);
   const expandWorktree = useCallback((worktreeId: WorktreeId) => {
     setCollapsedWorktreeIds((previous) => {
       if (!previous.has(worktreeId)) {
@@ -2032,6 +2039,7 @@ export default function Sidebar() {
                                 );
                                 const worktreeDiffStat =
                                   worktreeDiffStatById.get(worktree.id) ?? null;
+                                const worktreeStatus = worktreeStatusById.get(worktree.id) ?? null;
                                 const worktreeSubtitle = worktreeDisplaySubtitle(worktree, project);
                                 const worktreePath = worktree.isRoot
                                   ? null
@@ -2103,7 +2111,23 @@ export default function Sidebar() {
                                             >
                                               {worktreeTitle}
                                             </div>
-                                            {worktreeSubtitle ? (
+                                            {worktreeStatus ? (
+                                              <div
+                                                className={`inline-flex min-w-0 items-center gap-1 truncate text-[10px] ${worktreeStatus.colorClass}`}
+                                                data-worktree-status={worktreeStatus.kind}
+                                                data-worktree-id={worktree.id}
+                                                title={worktreeStatus.label}
+                                              >
+                                                <span
+                                                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${worktreeStatus.dotClass} ${
+                                                    worktreeStatus.pulse ? "animate-pulse" : ""
+                                                  }`}
+                                                />
+                                                <span className="truncate">
+                                                  {worktreeStatus.label}
+                                                </span>
+                                              </div>
+                                            ) : worktreeSubtitle ? (
                                               <div className="truncate text-[10px] text-muted-foreground/60">
                                                 {worktreeSubtitle}
                                               </div>
@@ -2232,13 +2256,7 @@ export default function Sidebar() {
                                             const isActive = routeThreadId === thread.id;
                                             const isSelected = selectedThreadIds.has(thread.id);
                                             const isHighlighted = isActive || isSelected;
-                                            const threadStatus = resolveThreadStatusPill({
-                                              thread,
-                                              hasPendingApprovals:
-                                                pendingApprovalByThreadId.get(thread.id) === true,
-                                              hasPendingUserInput:
-                                                pendingUserInputByThreadId.get(thread.id) === true,
-                                            });
+                                            const threadStatus = resolveThreadStatusVisual(thread);
                                             const prStatus = prStatusIndicator(
                                               prByThreadId.get(thread.id) ?? null,
                                             );
@@ -2336,6 +2354,8 @@ export default function Sidebar() {
                                                     {threadStatus && (
                                                       <span
                                                         className={`inline-flex items-center gap-1 text-[10px] ${threadStatus.colorClass}`}
+                                                        data-thread-status={threadStatus.kind}
+                                                        data-thread-id={thread.id}
                                                       >
                                                         <span
                                                           className={`h-1.5 w-1.5 rounded-full ${threadStatus.dotClass} ${
