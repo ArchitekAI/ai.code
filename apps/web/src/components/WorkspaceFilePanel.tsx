@@ -1,14 +1,17 @@
 import type { IDockviewPanelProps } from "dockview";
+import type { EditorId, ResolvedKeybindingsConfig } from "@repo/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { LoaderIcon, RefreshCwIcon, SaveIcon } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 
 import { useTheme } from "../hooks/useTheme";
+import { T3CODE_MONACO_DARK_THEME, T3CODE_MONACO_LIGHT_THEME } from "../lib/monacoTheme";
 import { projectQueryKeys, projectReadFileQueryOptions } from "../lib/projectReactQuery";
 import { readNativeApi } from "../nativeApi";
-import { preferredTerminalEditor, resolvePathLinkTarget } from "../terminal-links";
+import { resolvePathLinkTarget } from "../terminal-links";
 import { useWorkspaceDockPanelStore } from "../workspaceDockPanelStore";
 import type { WorktreeDockFilePanelParams } from "../worktreeChatLayoutStore";
+import OpenInPicker from "./OpenInPicker";
 import { Button } from "./ui/button";
 import { toastManager } from "./ui/toast";
 
@@ -16,13 +19,17 @@ const WorkspaceCodeEditorSurface = lazy(() => import("./WorkspaceCodeEditorSurfa
 
 interface WorkspaceFilePanelProps extends IDockviewPanelProps<WorktreeDockFilePanelParams> {
   cwd: string | null;
+  keybindings: ResolvedKeybindingsConfig;
+  availableEditors: ReadonlyArray<EditorId>;
 }
 
 function renderUnsupportedState(input: {
   kind: "binary" | "too_large";
   relativePath: string;
   sizeBytes: number;
-  onOpenExternal: () => void;
+  keybindings: ResolvedKeybindingsConfig;
+  availableEditors: ReadonlyArray<EditorId>;
+  openInCwd: string | null;
 }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
@@ -36,14 +43,22 @@ function renderUnsupportedState(input: {
           {input.relativePath} · {input.sizeBytes.toLocaleString()} bytes
         </p>
       </div>
-      <Button size="sm" variant="outline" onClick={input.onOpenExternal}>
-        Open in editor
-      </Button>
+      <OpenInPicker
+        availableEditors={input.availableEditors}
+        keybindings={input.keybindings}
+        openInCwd={input.openInCwd}
+      />
     </div>
   );
 }
 
-export default function WorkspaceFilePanel({ api, params, cwd }: WorkspaceFilePanelProps) {
+export default function WorkspaceFilePanel({
+  api,
+  params,
+  cwd,
+  keybindings,
+  availableEditors,
+}: WorkspaceFilePanelProps) {
   const { resolvedTheme } = useTheme();
   const queryClient = useQueryClient();
   const setPanelMeta = useWorkspaceDockPanelStore((state) => state.setMeta);
@@ -60,9 +75,13 @@ export default function WorkspaceFilePanel({ api, params, cwd }: WorkspaceFilePa
   );
 
   const fileResult = fileQuery.data;
-  const theme = resolvedTheme === "dark" ? "vs-dark" : "light";
+  const theme = resolvedTheme === "dark" ? T3CODE_MONACO_DARK_THEME : T3CODE_MONACO_LIGHT_THEME;
   const isTextFile = fileResult?.kind === "text";
   const dirty = isTextFile ? draftText !== fileResult.contents : false;
+  const openInCwd = useMemo(
+    () => (cwd ? resolvePathLinkTarget(params.relativePath, cwd) : null),
+    [cwd, params.relativePath],
+  );
 
   useEffect(() => {
     api.setTitle(params.title ?? params.relativePath.split("/").at(-1) ?? params.relativePath);
@@ -89,22 +108,6 @@ export default function WorkspaceFilePanel({ api, params, cwd }: WorkspaceFilePa
       clearPanelMeta(api.id);
     };
   }, [api.id, clearPanelMeta, dirty, setPanelMeta]);
-
-  const openExternal = useCallback(() => {
-    const nativeApi = readNativeApi();
-    if (!nativeApi || !cwd) {
-      return;
-    }
-    void nativeApi.shell
-      .openInEditor(resolvePathLinkTarget(params.relativePath, cwd), preferredTerminalEditor())
-      .catch((error) => {
-        toastManager.add({
-          type: "error",
-          title: "Unable to open file",
-          description: error instanceof Error ? error.message : "An unknown error occurred.",
-        });
-      });
-  }, [cwd, params.relativePath]);
 
   const saveMutation = useMutation({
     mutationFn: async (overwrite: boolean) => {
@@ -182,9 +185,11 @@ export default function WorkspaceFilePanel({ api, params, cwd }: WorkspaceFilePa
             <RefreshCwIcon className="mr-1.5 size-3.5" />
             Reload
           </Button>
-          <Button size="sm" variant="outline" onClick={openExternal}>
-            Open in editor
-          </Button>
+          <OpenInPicker
+            availableEditors={availableEditors}
+            keybindings={keybindings}
+            openInCwd={openInCwd}
+          />
           <Button
             size="sm"
             disabled={!dirty || saveMutation.isPending || !isTextFile}
@@ -229,7 +234,9 @@ export default function WorkspaceFilePanel({ api, params, cwd }: WorkspaceFilePa
             kind: fileResult.kind,
             relativePath: fileResult.relativePath,
             sizeBytes: fileResult.sizeBytes,
-            onOpenExternal: openExternal,
+            keybindings,
+            availableEditors,
+            openInCwd,
           })
         ) : isTextFile ? (
           <Suspense

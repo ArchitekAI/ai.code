@@ -1,21 +1,24 @@
 import type { IDockviewPanelProps } from "dockview";
+import type { EditorId, ResolvedKeybindingsConfig } from "@repo/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { Columns2Icon, LoaderIcon, Rows3Icon } from "lucide-react";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 
 import { useTheme } from "../hooks/useTheme";
 import { gitWorkingTreeFileDiffQueryOptions } from "../lib/gitReactQuery";
-import { readNativeApi } from "../nativeApi";
-import { preferredTerminalEditor, resolvePathLinkTarget } from "../terminal-links";
+import { T3CODE_MONACO_DARK_THEME, T3CODE_MONACO_LIGHT_THEME } from "../lib/monacoTheme";
+import { resolvePathLinkTarget } from "../terminal-links";
 import type { WorktreeDockDiffPanelParams } from "../worktreeChatLayoutStore";
+import OpenInPicker from "./OpenInPicker";
 import { Button } from "./ui/button";
 import { Toggle } from "./ui/toggle";
-import { toastManager } from "./ui/toast";
 
 const WorkspaceCodeEditorSurface = lazy(() => import("./WorkspaceCodeEditorSurface"));
 
 interface WorkspaceDiffPanelProps extends IDockviewPanelProps<WorktreeDockDiffPanelParams> {
   cwd: string | null;
+  keybindings: ResolvedKeybindingsConfig;
+  availableEditors: ReadonlyArray<EditorId>;
   onOpenFile: (relativePath: string) => void;
 }
 
@@ -23,6 +26,8 @@ export default function WorkspaceDiffPanel({
   api,
   params,
   cwd,
+  keybindings,
+  availableEditors,
   onOpenFile,
 }: WorkspaceDiffPanelProps) {
   const { resolvedTheme } = useTheme();
@@ -35,27 +40,15 @@ export default function WorkspaceDiffPanel({
     }),
   );
   const diffResult = diffQuery.data;
-  const theme = resolvedTheme === "dark" ? "vs-dark" : "light";
+  const theme = resolvedTheme === "dark" ? T3CODE_MONACO_DARK_THEME : T3CODE_MONACO_LIGHT_THEME;
+  const openInCwd = useMemo(
+    () => (cwd ? resolvePathLinkTarget(params.relativePath, cwd) : null),
+    [cwd, params.relativePath],
+  );
 
   useEffect(() => {
     api.setTitle(params.title ?? params.relativePath.split("/").at(-1) ?? params.relativePath);
   }, [api, params.relativePath, params.title]);
-
-  const openExternal = useCallback(() => {
-    const nativeApi = readNativeApi();
-    if (!nativeApi || !cwd) {
-      return;
-    }
-    void nativeApi.shell
-      .openInEditor(resolvePathLinkTarget(params.relativePath, cwd), preferredTerminalEditor())
-      .catch((error) => {
-        toastManager.add({
-          type: "error",
-          title: "Unable to open diff file",
-          description: error instanceof Error ? error.message : "An unknown error occurred.",
-        });
-      });
-  }, [cwd, params.relativePath]);
 
   const canUseMonaco = useMemo(() => {
     if (!diffResult) {
@@ -103,9 +96,11 @@ export default function WorkspaceDiffPanel({
           <Button size="sm" variant="outline" onClick={() => onOpenFile(params.relativePath)}>
             Open file
           </Button>
-          <Button size="sm" variant="outline" onClick={openExternal}>
-            Open in editor
-          </Button>
+          <OpenInPicker
+            availableEditors={availableEditors}
+            keybindings={keybindings}
+            openInCwd={openInCwd}
+          />
         </div>
       </div>
       <div className="min-h-0 flex-1">

@@ -1,4 +1,6 @@
-import { DiffEditor, Editor, type OnMount } from "@monaco-editor/react";
+import { DiffEditor, Editor, type BeforeMount, type OnMount } from "@monaco-editor/react";
+
+import { ensureMonacoThemes } from "../lib/monacoTheme";
 
 type CommonProps = {
   language?: string;
@@ -31,9 +33,14 @@ const COMMON_OPTIONS = {
 };
 
 export default function WorkspaceCodeEditorSurface(props: WorkspaceCodeEditorSurfaceProps) {
+  const beforeMount: BeforeMount = (monaco) => {
+    ensureMonacoThemes(monaco);
+  };
+
   if (props.mode === "diff") {
     return (
       <DiffEditor
+        beforeMount={beforeMount}
         key={`${props.path ?? "diff"}:${props.splitView ? "split" : "unified"}`}
         height="100%"
         {...(props.language ? { language: props.language } : {})}
@@ -60,6 +67,7 @@ export default function WorkspaceCodeEditorSurface(props: WorkspaceCodeEditorSur
 
   return (
     <Editor
+      beforeMount={beforeMount}
       height="100%"
       {...(props.language ? { language: props.language } : {})}
       {...(props.path ? { path: props.path } : {})}

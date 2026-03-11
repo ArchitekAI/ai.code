@@ -47,6 +47,15 @@ import { SidebarTrigger } from "./ui/sidebar";
 import { toastManager } from "./ui/toast";
 import { useAppSettings } from "../appSettings";
 import { useComposerDraftStore } from "../composerDraftStore";
+import {
+  closeActiveDockTab,
+  DOCKVIEW_CLOSE_ACTIVE_TAB_REQUEST_EVENT,
+  DOCKVIEW_CLOSE_TAB_REQUEST_EVENT,
+  DOCKVIEW_REOPEN_LAST_CLOSED_TAB_REQUEST_EVENT,
+  rememberLastClosedThreadId,
+  requestCloseDockTab,
+  type DockviewCloseTabRequestDetail,
+} from "../dockviewTabClose";
 import { isElectron } from "../env";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useTheme } from "../hooks/useTheme";
@@ -103,6 +112,16 @@ const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_AVAILABLE_EDITORS: EditorId[] = [];
 const MIN_RIGHT_RAIL_WIDTH = 260;
 const MAX_RIGHT_RAIL_WIDTH = 520;
+const MAX_RECENTLY_CLOSED_DOCK_TABS = 20;
+
+interface RecentlyClosedDockTab {
+  panelId: string;
+  title: string;
+  params: WorktreeDockPanelParams;
+  referenceGroupId: string | null;
+  referencePanelId: string | null;
+  referencePanelIndex: number | null;
+}
 
 function clampRightRailWidth(width: number): number {
   const safeWidth = Number.isFinite(width) ? width : MIN_RIGHT_RAIL_WIDTH;
@@ -121,6 +140,16 @@ function isThreadPanelParams(
 
 function threadIdFromPanelParams(params: WorktreeDockPanelParams): ThreadId | null {
   return params.kind === "thread" ? params.threadId : null;
+}
+
+function dockPanelIdFromParams(params: WorktreeDockPanelParams): string {
+  if (params.kind === "thread") {
+    return params.threadId;
+  }
+
+  return params.kind === "file"
+    ? buildFileDockPanelId(params.relativePath)
+    : buildDiffDockPanelId(params.relativePath);
 }
 
 declare global {
@@ -314,7 +343,7 @@ function DockWorkspaceTab(props: IDockviewPanelHeaderProps<WorktreeDockPanelPara
           onClick={(event) => {
             event.preventDefault();
             event.stopPropagation();
-            props.api.close();
+            requestCloseDockTab(props.api.id);
           }}
           onPointerDown={(event) => {
             event.preventDefault();
@@ -488,6 +517,7 @@ export default function WorktreeChatWorkspace({
   const [terminalFocusRequestId, setTerminalFocusRequestId] = useState(0);
   const restoredRef = useRef(false);
   const pendingPanelReferenceIdRef = useRef<string | null>(null);
+  const recentlyClosedDockTabsRef = useRef<RecentlyClosedDockTab[]>([]);
   const rightRailResizeStateRef = useRef<{
     pointerId: number;
     startX: number;
@@ -1006,25 +1036,47 @@ export default function WorktreeChatWorkspace({
         title: string;
         params: WorktreeDockPanelParams;
         referencePanelId?: string | null;
+        referenceGroupId?: string | null;
+        referencePanelIndex?: number | null;
       },
     ) => {
       const resolvedReferencePanelId =
         input.referencePanelId ?? pendingPanelReferenceIdRef.current ?? null;
-      const referencePanel =
-        (resolvedReferencePanelId ? api.getPanel(resolvedReferencePanelId) : null) ??
-        api.activePanel;
+      const referencePanel = resolvedReferencePanelId
+        ? api.getPanel(resolvedReferencePanelId)
+        : null;
+      const referenceGroup =
+        (input.referenceGroupId ? api.getGroup(input.referenceGroupId) : null) ?? null;
       const panel = api.addPanel<WorktreeDockPanelParams>({
         id: input.id,
         component: input.component,
         title: input.title,
         params: input.params,
         renderer: "always",
-        ...(referencePanel
+        ...(referencePanel || referenceGroup || api.activePanel
           ? {
-              position: {
-                referencePanel: referencePanel.id,
-                direction: "within",
-              } as const,
+              position: referencePanel
+                ? {
+                    referencePanel: referencePanel.id,
+                    direction: "within",
+                    ...(input.referencePanelIndex !== undefined &&
+                    input.referencePanelIndex !== null
+                      ? { index: input.referencePanelIndex }
+                      : {}),
+                  }
+                : referenceGroup
+                  ? {
+                      referenceGroup: referenceGroup.id,
+                      direction: "within",
+                      ...(input.referencePanelIndex !== undefined &&
+                      input.referencePanelIndex !== null
+                        ? { index: input.referencePanelIndex }
+                        : {}),
+                    }
+                  : {
+                      referencePanel: api.activePanel!.id,
+                      direction: "within",
+                    },
             }
           : {}),
       });
@@ -1035,7 +1087,15 @@ export default function WorktreeChatWorkspace({
   );
 
   const addThreadPanel = useCallback(
-    (api: DockviewApi, targetThreadId: ThreadId, referencePanelId?: string | null) => {
+    (
+      api: DockviewApi,
+      targetThreadId: ThreadId,
+      options?: {
+        referencePanelId?: string | null;
+        referenceGroupId?: string | null;
+        referencePanelIndex?: number | null;
+      },
+    ) => {
       const entry = workspaceThreadsById.get(targetThreadId);
       if (!entry) {
         return null;
@@ -1046,7 +1106,15 @@ export default function WorktreeChatWorkspace({
         component: DOCKVIEW_THREAD_COMPONENT,
         title: entry.title,
         params: buildThreadPanelParams(entry),
-        ...(referencePanelId !== undefined ? { referencePanelId } : {}),
+        ...(options?.referencePanelId !== undefined
+          ? { referencePanelId: options.referencePanelId }
+          : {}),
+        ...(options?.referenceGroupId !== undefined
+          ? { referenceGroupId: options.referenceGroupId }
+          : {}),
+        ...(options?.referencePanelIndex !== undefined
+          ? { referencePanelIndex: options.referencePanelIndex }
+          : {}),
       });
     },
     [addDockPanel, workspaceThreadsById],
@@ -1062,7 +1130,7 @@ export default function WorktreeChatWorkspace({
         return;
       }
 
-      const addedPanel = addThreadPanel(dockviewApi, targetThreadId, referencePanelId);
+      const addedPanel = addThreadPanel(dockviewApi, targetThreadId, { referencePanelId });
       if (addedPanel) {
         addedPanel.api.setActive();
       }
@@ -1100,6 +1168,98 @@ export default function WorktreeChatWorkspace({
     },
     [addDockPanel, dockviewApi, isMobile, rightRailState.open, setRightRailState, worktreeId],
   );
+
+  const closeDockPanel = useCallback(
+    (panelId: string) => {
+      if (!dockviewApi) {
+        return false;
+      }
+
+      const panel = dockviewApi.getPanel(panelId);
+      if (!panel) {
+        return false;
+      }
+
+      const params = panel.api.getParameters<WorktreeDockPanelParams>();
+      const groupPanels = [...panel.group.panels];
+      const panelIndex = groupPanels.findIndex((candidate) => candidate.id === panel.id);
+      const referencePanel =
+        (panelIndex >= 0 ? groupPanels[panelIndex + 1] : null) ??
+        (panelIndex > 0 ? groupPanels[panelIndex - 1] : null) ??
+        null;
+
+      const nextEntry: RecentlyClosedDockTab = {
+        panelId: panel.id,
+        title: panel.title ?? (params.kind === "thread" ? "Thread" : basename(params.relativePath)),
+        params,
+        referenceGroupId: panel.group.id,
+        referencePanelId: referencePanel?.id ?? null,
+        referencePanelIndex: panelIndex >= 0 ? panelIndex : null,
+      };
+
+      recentlyClosedDockTabsRef.current = [
+        nextEntry,
+        ...recentlyClosedDockTabsRef.current.filter((entry) => entry.panelId !== panel.id),
+      ].slice(0, MAX_RECENTLY_CLOSED_DOCK_TABS);
+
+      if (params.kind === "thread") {
+        rememberLastClosedThreadId(params.threadId);
+      }
+
+      panel.api.close();
+      return true;
+    },
+    [dockviewApi],
+  );
+
+  const reopenLastClosedDockTab = useCallback(() => {
+    if (!dockviewApi) {
+      return false;
+    }
+
+    while (recentlyClosedDockTabsRef.current.length > 0) {
+      const nextClosedTab = recentlyClosedDockTabsRef.current.shift();
+      if (!nextClosedTab) {
+        return false;
+      }
+
+      const existingPanel = dockviewApi.getPanel(nextClosedTab.panelId);
+      if (existingPanel) {
+        existingPanel.api.setActive();
+        return true;
+      }
+
+      if (nextClosedTab.params.kind === "thread") {
+        const addedPanel = addThreadPanel(dockviewApi, nextClosedTab.params.threadId, {
+          referenceGroupId: nextClosedTab.referenceGroupId,
+          referencePanelId: nextClosedTab.referencePanelId,
+          referencePanelIndex: nextClosedTab.referencePanelIndex,
+        });
+        if (addedPanel) {
+          addedPanel.api.setActive();
+          return true;
+        }
+        continue;
+      }
+
+      const addedPanel = addDockPanel(dockviewApi, {
+        id: dockPanelIdFromParams(nextClosedTab.params),
+        component:
+          nextClosedTab.params.kind === "file" ? DOCKVIEW_FILE_COMPONENT : DOCKVIEW_DIFF_COMPONENT,
+        title: nextClosedTab.title,
+        params: nextClosedTab.params,
+        referenceGroupId: nextClosedTab.referenceGroupId,
+        referencePanelId: nextClosedTab.referencePanelId,
+        referencePanelIndex: nextClosedTab.referencePanelIndex,
+      });
+      if (addedPanel) {
+        addedPanel.api.setActive();
+        return true;
+      }
+    }
+
+    return false;
+  }, [addDockPanel, addThreadPanel, dockviewApi]);
 
   const handleCreateThread = useCallback(
     (referencePanelId: ThreadId | null) => {
@@ -1242,18 +1402,30 @@ export default function WorktreeChatWorkspace({
       [DOCKVIEW_FILE_COMPONENT]: (props: IDockviewPanelProps<WorktreeDockPanelParams>) => (
         <WorkspaceFilePanel
           {...(props as IDockviewPanelProps<WorktreeDockFilePanelParams>)}
+          availableEditors={availableEditors}
           cwd={gitCwd}
+          keybindings={keybindings}
         />
       ),
       [DOCKVIEW_DIFF_COMPONENT]: (props: IDockviewPanelProps<WorktreeDockPanelParams>) => (
         <WorkspaceDiffPanel
           {...(props as IDockviewPanelProps<WorktreeDockDiffPanelParams>)}
+          availableEditors={availableEditors}
           cwd={gitCwd}
+          keybindings={keybindings}
           onOpenFile={(relativePath) => openWorkspaceFile(relativePath, "file")}
         />
       ),
     }),
-    [activateFocusedThread, focusedDockThreadId, gitCwd, openWorkspaceFile, threadId],
+    [
+      activateFocusedThread,
+      availableEditors,
+      focusedDockThreadId,
+      gitCwd,
+      keybindings,
+      openWorkspaceFile,
+      threadId,
+    ],
   );
 
   useEffect(() => {
@@ -1408,6 +1580,37 @@ export default function WorktreeChatWorkspace({
       }
     };
   }, [dockviewApi]);
+
+  useEffect(() => {
+    if (!dockviewApi) return;
+
+    const closeActiveTab = () => {
+      closeActiveDockTab(dockviewApi, closeDockPanel);
+    };
+    const closeTab = (event: Event) => {
+      const panelId = (event as CustomEvent<DockviewCloseTabRequestDetail>).detail?.panelId;
+      if (!panelId) {
+        return;
+      }
+
+      closeDockPanel(panelId);
+    };
+    const reopenLastClosedTab = () => {
+      reopenLastClosedDockTab();
+    };
+
+    window.addEventListener(DOCKVIEW_CLOSE_ACTIVE_TAB_REQUEST_EVENT, closeActiveTab);
+    window.addEventListener(DOCKVIEW_CLOSE_TAB_REQUEST_EVENT, closeTab);
+    window.addEventListener(DOCKVIEW_REOPEN_LAST_CLOSED_TAB_REQUEST_EVENT, reopenLastClosedTab);
+    return () => {
+      window.removeEventListener(DOCKVIEW_CLOSE_ACTIVE_TAB_REQUEST_EVENT, closeActiveTab);
+      window.removeEventListener(DOCKVIEW_CLOSE_TAB_REQUEST_EVENT, closeTab);
+      window.removeEventListener(
+        DOCKVIEW_REOPEN_LAST_CLOSED_TAB_REQUEST_EVENT,
+        reopenLastClosedTab,
+      );
+    };
+  }, [closeDockPanel, dockviewApi, reopenLastClosedDockTab]);
 
   useEffect(() => {
     const handler = (event: globalThis.KeyboardEvent) => {
