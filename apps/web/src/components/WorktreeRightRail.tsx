@@ -107,11 +107,15 @@ function formatRuntime(seconds: number | null): string | null {
   return remainingSeconds === 0 ? `${minutes}m` : `${minutes}m ${remainingSeconds}s`;
 }
 
-function renderTreeRowLabel(row: WorktreeExplorerRow, depth: number, theme: "light" | "dark") {
-  return (
-    <div className="flex min-w-0 items-center gap-2">
-      <span aria-hidden="true" className="shrink-0" style={{ width: `${depth * 14}px` }} />
-      {row.kind === "directory" ? (
+function renderTreeRowLabel(
+  row: WorktreeExplorerRow,
+  depth: number,
+  theme: "light" | "dark",
+  viewMode: "tree" | "list",
+) {
+  const toggleSlot =
+    viewMode === "tree" ? (
+      row.kind === "directory" ? (
         row.expandable ? (
           row.expanded ? (
             <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
@@ -121,7 +125,15 @@ function renderTreeRowLabel(row: WorktreeExplorerRow, depth: number, theme: "lig
         ) : (
           <span className="inline-block size-3.5 shrink-0" />
         )
-      ) : null}
+      ) : (
+        <span className="inline-block size-3.5 shrink-0" />
+      )
+    ) : null;
+
+  return (
+    <div className="flex min-w-0 items-center gap-2">
+      <span aria-hidden="true" className="shrink-0" style={{ width: `${depth * 14}px` }} />
+      {toggleSlot}
       <VscodeEntryIcon pathValue={row.path} kind={row.kind} theme={theme} />
       <span className="truncate">{row.name}</span>
     </div>
@@ -131,6 +143,7 @@ function renderTreeRowLabel(row: WorktreeExplorerRow, depth: number, theme: "lig
 function ExplorerList(props: {
   rows: WorktreeExplorerRow[];
   theme: "light" | "dark";
+  viewMode: "tree" | "list";
   onToggleDirectory: (path: string) => void;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
@@ -172,7 +185,7 @@ function ExplorerList(props: {
                   : "text-foreground/90 hover:bg-accent/30",
               )}
             >
-              {renderTreeRowLabel(row, row.depth, props.theme)}
+              {renderTreeRowLabel(row, row.depth, props.theme, props.viewMode)}
               {statLabel}
             </div>
           );
@@ -557,6 +570,7 @@ export default function WorktreeRightRail({
                 key={explorerListKey}
                 rows={allFilesRows}
                 theme={theme}
+                viewMode={railState.allFilesViewMode}
                 onToggleDirectory={(path) => onToggleDirectory("all-files", path)}
               />
             ) : (
@@ -569,6 +583,7 @@ export default function WorktreeRightRail({
               key={explorerListKey}
               rows={changesRows}
               theme={theme}
+              viewMode={railState.changesViewMode}
               onToggleDirectory={(path) => onToggleDirectory("changes", path)}
             />
           ) : (

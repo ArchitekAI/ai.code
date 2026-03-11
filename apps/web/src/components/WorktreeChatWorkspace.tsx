@@ -113,7 +113,7 @@ interface WorktreeChatWorkspaceProps {
 }
 
 type DockviewHeaderActionsProps = Parameters<
-  NonNullable<ComponentProps<typeof DockviewReact>["rightHeaderActionsComponent"]>
+  NonNullable<ComponentProps<typeof DockviewReact>["leftHeaderActionsComponent"]>
 >[0];
 
 interface DockThreadHeaderActionsExtraProps {
@@ -254,13 +254,9 @@ function DockThreadHeaderActions({
   activePanel,
   panels,
   worktree,
-  projectName,
-  worktreeSubtitle,
-  unopenedThreads,
   onCreateThread,
-  onOpenThread,
-}: DockviewHeaderActionsProps & DockThreadHeaderActionsExtraProps) {
-  const [pickerOpen, setPickerOpen] = useState(false);
+}: DockviewHeaderActionsProps &
+  Pick<DockThreadHeaderActionsExtraProps, "worktree" | "onCreateThread">) {
   const referencePanelId = (activePanel?.id ?? panels[0]?.id ?? null) as ThreadId | null;
   const worktreeTitle = worktree ? worktreeDisplayTitle(worktree) : "Threads";
   const newThreadShortcut = getNewThreadShortcutHint();
@@ -279,7 +275,25 @@ function DockThreadHeaderActions({
           <PlusIcon className="size-3.5" />
         </Button>
       </KbdTooltip>
+    </div>
+  );
+}
 
+function DockThreadHistoryAction({
+  activePanel,
+  panels,
+  worktree,
+  projectName,
+  worktreeSubtitle,
+  unopenedThreads,
+  onOpenThread,
+}: DockviewHeaderActionsProps & DockThreadHeaderActionsExtraProps) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const referencePanelId = (activePanel?.id ?? panels[0]?.id ?? null) as ThreadId | null;
+  const worktreeTitle = worktree ? worktreeDisplayTitle(worktree) : "Threads";
+
+  return (
+    <div className="dockview-thread-actions flex items-center gap-0.5 pr-1">
       <Popover onOpenChange={setPickerOpen} open={pickerOpen}>
         <PopoverTrigger
           render={
@@ -933,9 +947,20 @@ export default function WorktreeChatWorkspace({
       );
   }, [dockviewApi?.panels, workspaceThreadsById]);
 
-  const rightHeaderActionsComponent = useCallback(
+  const leftHeaderActionsComponent = useCallback(
     (props: DockviewHeaderActionsProps) => (
       <DockThreadHeaderActions
+        {...props}
+        worktree={activeWorktree}
+        onCreateThread={handleCreateThread}
+      />
+    ),
+    [activeWorktree, handleCreateThread],
+  );
+
+  const rightHeaderActionsComponent = useCallback(
+    (props: DockviewHeaderActionsProps) => (
+      <DockThreadHistoryAction
         {...props}
         projectName={activeProject?.name ?? null}
         worktree={activeWorktree}
@@ -1266,6 +1291,7 @@ export default function WorktreeChatWorkspace({
                   defaultRenderer="always"
                   defaultTabComponent={DockThreadTab}
                   disableFloatingGroups
+                  leftHeaderActionsComponent={leftHeaderActionsComponent}
                   rightHeaderActionsComponent={rightHeaderActionsComponent}
                   scrollbars="native"
                   theme={resolvedTheme === "dark" ? themeDark : themeLight}
