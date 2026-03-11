@@ -56,6 +56,31 @@ function normalizePathSegments(pathValue: string): string[] {
     .filter((segment) => segment.length > 0);
 }
 
+export function pathMatchesHiddenPrefix(
+  pathValue: string,
+  hiddenPrefixes: ReadonlyArray<string>,
+): boolean {
+  if (hiddenPrefixes.length === 0) {
+    return false;
+  }
+
+  const segments = normalizePathSegments(pathValue);
+  return segments.some((segment) =>
+    hiddenPrefixes.some((prefix) => prefix.length > 0 && segment.startsWith(prefix)),
+  );
+}
+
+export function filterWorktreeExplorerEntriesByHiddenPrefixes(
+  entries: ReadonlyArray<WorktreeExplorerEntry>,
+  hiddenPrefixes: ReadonlyArray<string>,
+): WorktreeExplorerEntry[] {
+  if (hiddenPrefixes.length === 0) {
+    return [...entries];
+  }
+
+  return entries.filter((entry) => !pathMatchesHiddenPrefix(entry.path, hiddenPrefixes));
+}
+
 function compareByName(a: { name: string }, b: { name: string }): number {
   return a.name.localeCompare(b.name, undefined, SORT_LOCALE_OPTIONS);
 }

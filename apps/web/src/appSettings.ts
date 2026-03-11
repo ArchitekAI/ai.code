@@ -270,7 +270,9 @@ function normalizeAppSettings(settings: Partial<AppSettings>): AppSettings {
       normalizeGitBranchPrefix(settings.gitBranchPrefix ?? DEFAULT_GIT_BRANCH_PREFIX) ??
       DEFAULT_GIT_BRANCH_PREFIX,
     commitAndPushPrompt: normalizePromptHotkeyMessage(settings.commitAndPushPrompt),
-    allFilesHiddenPrefixes: normalizeAllFilesHiddenPrefixes(settings.allFilesHiddenPrefixes ?? ["."]),
+    allFilesHiddenPrefixes: normalizeAllFilesHiddenPrefixes(
+      settings.allFilesHiddenPrefixes ?? ["."],
+    ),
   });
 }
 

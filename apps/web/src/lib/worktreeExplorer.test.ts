@@ -4,7 +4,9 @@ import {
   buildWorktreeExplorerList,
   buildWorktreeExplorerTree,
   collectWorktreeExplorerDirectoryPaths,
+  filterWorktreeExplorerEntriesByHiddenPrefixes,
   flattenWorktreeExplorerTree,
+  pathMatchesHiddenPrefix,
   type WorktreeExplorerEntry,
 } from "./worktreeExplorer";
 
@@ -69,5 +71,24 @@ describe("worktreeExplorer", () => {
 
     expect(rows.map((row) => row.path)).toEqual(["a-first.ts", "z-last.ts"]);
     expect(rows.every((row) => row.kind === "file")).toBe(true);
+  });
+
+  it("matches hidden prefixes against any path segment", () => {
+    expect(pathMatchesHiddenPrefix(".env", ["."])).toBe(true);
+    expect(pathMatchesHiddenPrefix("src/.generated/types.ts", ["."])).toBe(true);
+    expect(pathMatchesHiddenPrefix("src/components/Button.tsx", ["."])).toBe(false);
+  });
+
+  it("filters dot-prefixed files and directories from the explorer entries", () => {
+    const entries: WorktreeExplorerEntry[] = [
+      { path: ".env", kind: "file" },
+      { path: ".github", kind: "directory" },
+      { path: ".github/workflows/ci.yml", kind: "file" },
+      { path: "src/index.ts", kind: "file" },
+    ];
+
+    expect(filterWorktreeExplorerEntriesByHiddenPrefixes(entries, ["."])).toEqual([
+      { path: "src/index.ts", kind: "file" },
+    ]);
   });
 });

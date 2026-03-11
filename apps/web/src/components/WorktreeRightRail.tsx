@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { useAppSettings } from "../appSettings";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useTheme } from "../hooks/useTheme";
 import { sendCreatePullRequestPrompt } from "../lib/pullRequestPrompt";
@@ -28,6 +29,7 @@ import {
   buildWorktreeExplorerList,
   buildWorktreeExplorerTree,
   collectWorktreeExplorerDirectoryPaths,
+  filterWorktreeExplorerEntriesByHiddenPrefixes,
   flattenWorktreeExplorerTree,
   type WorktreeExplorerEntry,
   type WorktreeExplorerRow,
@@ -293,6 +295,7 @@ export default function WorktreeRightRail({
   onClose,
 }: WorktreeRightRailProps) {
   const { resolvedTheme } = useTheme();
+  const { settings } = useAppSettings();
   const queryClient = useQueryClient();
   const theme = resolvedTheme === "dark" ? "dark" : "light";
   const draftThread = useComposerDraftStore((state) =>
@@ -345,6 +348,14 @@ export default function WorktreeRightRail({
       (allFilesQuery.data?.entries ?? []).map((entry) => ({ path: entry.path, kind: entry.kind })),
     [allFilesQuery.data?.entries],
   );
+  const visibleAllFilesEntries = useMemo(
+    () =>
+      filterWorktreeExplorerEntriesByHiddenPrefixes(
+        allFilesEntries,
+        settings.allFilesHiddenPrefixes,
+      ),
+    [allFilesEntries, settings.allFilesHiddenPrefixes],
+  );
   const changesEntries = useMemo<WorktreeExplorerEntry[]>(
     () =>
       (gitStatusQuery.data?.workingTree.files ?? []).map((file) => ({
@@ -358,7 +369,10 @@ export default function WorktreeRightRail({
     [gitStatusQuery.data?.workingTree.files],
   );
 
-  const allFilesTree = useMemo(() => buildWorktreeExplorerTree(allFilesEntries), [allFilesEntries]);
+  const allFilesTree = useMemo(
+    () => buildWorktreeExplorerTree(visibleAllFilesEntries),
+    [visibleAllFilesEntries],
+  );
   const changesTree = useMemo(() => buildWorktreeExplorerTree(changesEntries), [changesEntries]);
 
   const effectiveAllFilesExpandedPaths = useMemo(
@@ -378,8 +392,13 @@ export default function WorktreeRightRail({
             nodes: allFilesTree,
             expandedPaths: effectiveAllFilesExpandedPaths,
           })
-        : buildWorktreeExplorerList(allFilesEntries),
-    [allFilesEntries, allFilesTree, effectiveAllFilesExpandedPaths, railState.allFilesViewMode],
+        : buildWorktreeExplorerList(visibleAllFilesEntries),
+    [
+      visibleAllFilesEntries,
+      allFilesTree,
+      effectiveAllFilesExpandedPaths,
+      railState.allFilesViewMode,
+    ],
   );
   const changesRows = useMemo(
     () =>

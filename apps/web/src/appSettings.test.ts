@@ -5,6 +5,7 @@ import {
   getAppModelOptions,
   getProviderStartOptionsFromAppSettings,
   getSlashModelOptions,
+  normalizeAllFilesHiddenPrefixes,
   normalizeCustomModelSlugs,
   normalizeEnvironmentVariablesText,
   parseEnvironmentVariablesText,
@@ -25,6 +26,10 @@ describe("app name settings", () => {
 
   it("defaults the commit-and-push hotkey prompt", () => {
     expect(getAppSettingsSnapshot().commitAndPushPrompt).toBe(DEFAULT_COMMIT_AND_PUSH_PROMPT);
+  });
+
+  it("defaults All Files to hiding dot-prefixed entries", () => {
+    expect(getAppSettingsSnapshot().allFilesHiddenPrefixes).toEqual(["."]);
   });
 });
 
@@ -139,6 +144,7 @@ describe("persisted settings migration", () => {
     expect(snapshot.claudeBinaryPath).toBe("");
     expect(snapshot.claudeEnvVars).toBe("");
     expect(snapshot.customClaudeModels).toEqual([]);
+    expect(snapshot.allFilesHiddenPrefixes).toEqual(["."]);
   });
 });
 
@@ -224,5 +230,11 @@ describe("normalizePromptHotkeyMessage", () => {
 
   it("preserves custom prompt text after trimming outer whitespace", () => {
     expect(normalizePromptHotkeyMessage("  Ship it and push  ")).toBe("Ship it and push");
+  });
+});
+
+describe("normalizeAllFilesHiddenPrefixes", () => {
+  it("trims, deduplicates, and drops blank prefixes", () => {
+    expect(normalizeAllFilesHiddenPrefixes([" .", "", ".", " dist ", null])).toEqual([".", "dist"]);
   });
 });

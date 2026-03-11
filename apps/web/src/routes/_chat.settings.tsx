@@ -7,11 +7,13 @@ import { DEFAULT_GIT_BRANCH_PREFIX, normalizeGitBranchPrefix } from "@repo/share
 import { getModelOptions, normalizeModelSlug } from "@repo/shared/model";
 
 import {
+  MAX_ALL_FILES_HIDDEN_PREFIX_LENGTH,
   MAX_PROMPT_HOTKEY_MESSAGE_LENGTH,
   MAX_CLAUDE_ENV_VARS_LENGTH,
   MAX_CUSTOM_APP_NAME_LENGTH,
   MAX_CUSTOM_MODEL_LENGTH,
   getCustomModelsForProvider,
+  normalizeAllFilesHiddenPrefixes,
   parseEnvironmentVariablesText,
   normalizePromptHotkeyMessage,
   patchCustomModels,
@@ -91,6 +93,9 @@ function SettingsRouteView() {
   const [commitAndPushPromptInput, setCommitAndPushPromptInput] = useState(
     settings.commitAndPushPrompt,
   );
+  const [allFilesHiddenPrefixesInput, setAllFilesHiddenPrefixesInput] = useState(
+    settings.allFilesHiddenPrefixes.join("\n"),
+  );
   const [gitBranchPrefixError, setGitBranchPrefixError] = useState<string | null>(null);
 
   const codexBinaryPath = settings.codexBinaryPath;
@@ -128,6 +133,10 @@ function SettingsRouteView() {
     setCommitAndPushPromptInput(settings.commitAndPushPrompt);
   }, [settings.commitAndPushPrompt]);
 
+  useEffect(() => {
+    setAllFilesHiddenPrefixesInput(settings.allFilesHiddenPrefixes.join("\n"));
+  }, [settings.allFilesHiddenPrefixes]);
+
   const commitCustomAppName = useCallback(() => {
     const normalized = normalizeAppBaseName(customAppNameInput) ?? "";
     setCustomAppNameInput(normalized);
@@ -143,6 +152,15 @@ function SettingsRouteView() {
       updateSettings({ commitAndPushPrompt: normalized });
     }
   }, [commitAndPushPromptInput, settings.commitAndPushPrompt, updateSettings]);
+
+  const commitAllFilesHiddenPrefixes = useCallback(() => {
+    const normalized = normalizeAllFilesHiddenPrefixes(allFilesHiddenPrefixesInput.split("\n"));
+    const normalizedText = normalized.join("\n");
+    setAllFilesHiddenPrefixesInput(normalizedText);
+    if (normalized.join("\0") !== settings.allFilesHiddenPrefixes.join("\0")) {
+      updateSettings({ allFilesHiddenPrefixes: normalized });
+    }
+  }, [allFilesHiddenPrefixesInput, settings.allFilesHiddenPrefixes, updateSettings]);
 
   const openKeybindingsFile = useCallback(() => {
     if (!keybindingsConfigPath) return;
@@ -828,6 +846,59 @@ function SettingsRouteView() {
                     onClick={() =>
                       updateSettings({
                         commitAndPushPrompt: defaults.commitAndPushPrompt,
+                      })
+                    }
+                  >
+                    Restore default
+                  </Button>
+                </div>
+              ) : null}
+            </section>
+
+            <section className="rounded-2xl border border-border bg-card p-5">
+              <div className="mb-4">
+                <h2 className="text-sm font-medium text-foreground">Workspace explorer</h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Hide entries from the <code>All files</code> tab when any file or folder name
+                  starts with one of these prefixes.
+                </p>
+              </div>
+
+              <div className="rounded-lg border border-border bg-background p-3">
+                <label htmlFor="all-files-hidden-prefixes" className="block space-y-2">
+                  <span className="text-sm font-medium text-foreground">Hidden prefixes</span>
+                  <Textarea
+                    id="all-files-hidden-prefixes"
+                    rows={4}
+                    maxLength={(MAX_ALL_FILES_HIDDEN_PREFIX_LENGTH + 1) * 32}
+                    value={allFilesHiddenPrefixesInput}
+                    onChange={(event) => setAllFilesHiddenPrefixesInput(event.target.value)}
+                    onBlur={commitAllFilesHiddenPrefixes}
+                    placeholder="."
+                    spellCheck={false}
+                    className="font-mono text-xs"
+                  />
+                  <span className="text-xs text-muted-foreground">
+                    Enter one prefix per line. The default <code>.</code> hides dotfiles and
+                    dot-directories like <code>.git</code>, <code>.env</code>, and{" "}
+                    <code>.github</code>.
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    Saved prefixes: {settings.allFilesHiddenPrefixes.length}. Each prefix can be up
+                    to {MAX_ALL_FILES_HIDDEN_PREFIX_LENGTH} characters.
+                  </span>
+                </label>
+              </div>
+
+              {settings.allFilesHiddenPrefixes.join("\0") !==
+              defaults.allFilesHiddenPrefixes.join("\0") ? (
+                <div className="mt-3 flex justify-end">
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() =>
+                      updateSettings({
+                        allFilesHiddenPrefixes: defaults.allFilesHiddenPrefixes,
                       })
                     }
                   >
