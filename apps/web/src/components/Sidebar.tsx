@@ -5,8 +5,8 @@ import {
   ChevronRightIcon,
   FolderIcon,
   FolderPlusIcon,
+  GitBranchPlusIcon,
   GitPullRequestIcon,
-  PlusIcon,
   RocketIcon,
   SettingsIcon,
   TerminalIcon,
@@ -1959,7 +1959,7 @@ export default function Sidebar() {
                                       void handleCreateWorktree(project.id);
                                     }}
                                   >
-                                    <PlusIcon className="size-3.5" />
+                                    <GitBranchPlusIcon className="size-3.5" />
                                   </SidebarMenuAction>
                                 }
                               />

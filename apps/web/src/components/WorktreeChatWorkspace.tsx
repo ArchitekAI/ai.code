@@ -27,7 +27,7 @@ import {
 } from "dockview";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { ChevronRightIcon, Clock3Icon, PlusIcon, XIcon } from "lucide-react";
+import { ChevronRightIcon, Clock3Icon, GitBranchIcon, PlusIcon, XIcon } from "lucide-react";
 
 import ChatView from "./ChatView";
 import GitActionsControl from "./GitActionsControl";
@@ -36,7 +36,6 @@ import ProjectScriptsControl, { type NewProjectScriptInput } from "./ProjectScri
 import { PROVIDER_ICON_BY_PROVIDER } from "./providerIcons";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import WorktreeRightRail from "./WorktreeRightRail";
-import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { KbdTooltip } from "./ui/kbd-tooltip";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
@@ -443,6 +442,7 @@ export default function WorktreeChatWorkspace({
     null;
   const worktreeSubtitle =
     activeWorktree && activeProject ? worktreeDisplaySubtitle(activeWorktree, activeProject) : null;
+  const worktreeHeaderLabel = [activeProject?.name, activeThread?.branch].filter(Boolean).join("/");
 
   const keybindingsQuery = useQuery(serverConfigQueryOptions());
   const branchesQuery = useQuery(gitBranchesQueryOptions(gitCwd));
@@ -1198,20 +1198,16 @@ export default function WorktreeChatWorkspace({
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden sm:gap-3">
             <SidebarTrigger className="size-7 shrink-0 md:hidden" />
-            {activeProject?.name ? (
-              <Badge variant="outline" className="min-w-0 shrink truncate">
-                {activeProject.name}
-              </Badge>
-            ) : null}
-            {activeThread?.branch ? (
-              <Badge variant="outline" className="min-w-0 shrink truncate">
-                {activeThread.branch}
-              </Badge>
+            {worktreeHeaderLabel ? (
+              <div className="flex min-w-0 shrink items-center gap-1.5 text-sm font-medium text-foreground/90">
+                <GitBranchIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 shrink truncate" title={worktreeHeaderLabel}>
+                  {worktreeHeaderLabel}
+                </span>
+              </div>
             ) : null}
             {activeProject?.name && !isGitRepo ? (
-              <Badge variant="outline" className="shrink-0 text-[10px] text-amber-700">
-                No Git
-              </Badge>
+              <span className="shrink-0 text-[10px] font-medium text-amber-700">No Git</span>
             ) : null}
           </div>
           <div className="@container/header-actions flex min-w-0 flex-1 items-center justify-end gap-2 @sm/header-actions:gap-3">
