@@ -1,0 +1,4 @@
+interface:
+  display_name: "Daytona Platform Ops"
+  short_description: "Operate Daytona securely with limits, webhooks, telemetry, and org controls."
+  default_prompt: "Use $daytona-platform-ops to manage Daytona API keys, org settings, audit logs, webhooks, limits, billing, networking, telemetry, and deployment concerns."

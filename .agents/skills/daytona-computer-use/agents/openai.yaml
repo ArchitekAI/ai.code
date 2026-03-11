@@ -1,0 +1,4 @@
+interface:
+  display_name: "Daytona Computer Use"
+  short_description: "Automate GUI workflows in Daytona with screenshots and input control."
+  default_prompt: "Use $daytona-computer-use to automate browser or desktop workflows in Daytona with mouse, keyboard, screenshot, recording, and VNC capabilities."

@@ -143,6 +143,7 @@ import {
   ListTodoIcon,
   LockIcon,
   LockOpenIcon,
+  MapIcon,
   Undo2Icon,
   XIcon,
   CopyIcon,
@@ -178,6 +179,8 @@ import {
 } from "./Icons";
 import { cn, isMacPlatform, isWindowsPlatform, randomUUID } from "~/lib/utils";
 import { Badge } from "./ui/badge";
+import { Kbd, KbdGroup } from "./ui/kbd";
+import { KbdTooltip } from "./ui/kbd-tooltip";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { Command, CommandItem, CommandList } from "./ui/command";
 import {
@@ -265,6 +268,7 @@ const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
 const SCRIPT_TERMINAL_COLS = 120;
 const SCRIPT_TERMINAL_ROWS = 30;
 const WORKTREE_BRANCH_PREFIX = "t3code";
+const COMPOSER_EDITOR_TEST_ID = "composer-editor";
 
 function readLastInvokedScriptByProjectFromStorage(): Record<string, string> {
   const stored = localStorage.getItem(LAST_INVOKED_SCRIPT_BY_PROJECT_KEY);
@@ -650,6 +654,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const [expandedWorkGroups, setExpandedWorkGroups] = useState<Record<string, boolean>>({});
   const [planSidebarOpen, setPlanSidebarOpen] = useState(false);
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
+  const [isComposerFocused, setIsComposerFocused] = useState(false);
   // Tracks whether the user explicitly dismissed the sidebar for the active turn.
   const planSidebarDismissedForTurnRef = useRef<string | null>(null);
   // When set, the thread-change reset effect will open the sidebar instead of closing it.
@@ -699,6 +704,17 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const setMessagesScrollContainerRef = useCallback((element: HTMLDivElement | null) => {
     messagesScrollRef.current = element;
     setMessagesScrollElement(element);
+  }, []);
+  const syncComposerFocusState = useCallback(() => {
+    const activeElement = document.activeElement;
+    if (!(activeElement instanceof HTMLElement)) {
+      setIsComposerFocused(false);
+      return;
+    }
+    setIsComposerFocused(
+      activeElement.dataset.testid === COMPOSER_EDITOR_TEST_ID ||
+        activeElement.closest(`[data-testid="${COMPOSER_EDITOR_TEST_ID}"]`) !== null,
+    );
   }, []);
 
   const terminalState = useTerminalStateStore((state) =>
@@ -1381,6 +1397,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
     () => shortcutLabelForCommand(keybindings, "terminal.split"),
     [keybindings],
   );
+  const reasoningShortcut = useMemo<ReadonlyArray<string> | undefined>(
+    () => (isElectron ? [isMacPlatform(navigator.platform) ? "\u2318" : "Ctrl", "T"] : undefined),
+    [],
+  );
   const newTerminalShortcutLabel = useMemo(
     () => shortcutLabelForCommand(keybindings, "terminal.new"),
     [keybindings],
@@ -1439,6 +1459,31 @@ export default function ChatView({ threadId }: ChatViewProps) {
       focusComposer();
     });
   }, [focusComposer]);
+  const toggleReasoningEffort = useCallback((): boolean => {
+    if (selectedProvider !== "codex" || reasoningOptions.length === 0) {
+      return false;
+    }
+
+    const currentIndex = reasoningOptions.findIndex((option) => option === selectedEffort);
+    const nextEffort =
+      currentIndex < 0
+        ? reasoningOptions[0]
+        : reasoningOptions[(currentIndex + 1) % reasoningOptions.length];
+    if (!nextEffort) {
+      return false;
+    }
+
+    setComposerDraftEffort(threadId, nextEffort);
+    scheduleComposerFocus();
+    return true;
+  }, [
+    reasoningOptions,
+    scheduleComposerFocus,
+    selectedEffort,
+    selectedProvider,
+    setComposerDraftEffort,
+    threadId,
+  ]);
   const setTerminalOpen = useCallback(
     (open: boolean) => {
       if (!activeThreadId) return;
@@ -2321,6 +2366,21 @@ export default function ChatView({ threadId }: ChatViewProps) {
   }, [activeThreadId, focusComposer, terminalState.terminalOpen]);
 
   useEffect(() => {
+    syncComposerFocusState();
+
+    const handleFocusChange = () => {
+      syncComposerFocusState();
+    };
+
+    document.addEventListener("focusin", handleFocusChange);
+    document.addEventListener("focusout", handleFocusChange);
+    return () => {
+      document.removeEventListener("focusin", handleFocusChange);
+      document.removeEventListener("focusout", handleFocusChange);
+    };
+  }, [syncComposerFocusState]);
+
+  useEffect(() => {
     const isTerminalFocused = (): boolean => {
       const activeElement = document.activeElement;
       if (!(activeElement instanceof HTMLElement)) return false;
@@ -2404,6 +2464,46 @@ export default function ChatView({ threadId }: ChatViewProps) {
     onToggleDiff,
     toggleTerminalVisibility,
   ]);
+
+  useEffect(() => {
+    if (!isElectron) {
+      return;
+    }
+
+    const handler = (event: globalThis.KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat) return;
+      if (event.shiftKey || event.altKey) return;
+      if (!(event.metaKey || event.ctrlKey)) return;
+      if (event.key.toLowerCase() !== "t") return;
+      if (!toggleReasoningEffort()) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [toggleReasoningEffort]);
+
+  useEffect(() => {
+    if (!isElectron) {
+      return;
+    }
+
+    const handler = (event: globalThis.KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat) return;
+      if (event.shiftKey || event.altKey) return;
+      if (!(event.metaKey || event.ctrlKey)) return;
+      if (event.key.toLowerCase() !== "l") return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      focusComposer();
+    };
+
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [focusComposer]);
 
   const addComposerImages = (files: File[]) => {
     if (!activeThreadId || files.length === 0) return;
@@ -3514,6 +3614,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     }
     void onRevertToTurnCount(targetTurnCount);
   };
+  const showComposerFocusHint = isElectron && !isComposerFocused;
 
   // Empty state: no active thread
   if (!activeThread) {
@@ -3634,7 +3735,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
               data-chat-composer-form="true"
             >
               <div
-                className={`group rounded-[20px] border bg-card transition-colors duration-200 focus-within:border-ring/45 ${
+                className={`group relative rounded-[20px] border bg-card transition-colors duration-200 focus-within:border-ring/45 ${
                   isDragOverComposer ? "border-primary/70 bg-accent/30" : "border-border"
                 }`}
                 onDragEnter={onComposerDragEnter}
@@ -3642,6 +3743,19 @@ export default function ChatView({ threadId }: ChatViewProps) {
                 onDragLeave={onComposerDragLeave}
                 onDrop={onComposerDrop}
               >
+                {showComposerFocusHint ? (
+                  <div className="pointer-events-none absolute right-3 top-3 z-10 flex items-center gap-2 text-[11px] text-muted-foreground/55">
+                    <KbdGroup className="gap-1">
+                      <Kbd className="h-4.5 min-w-4.5 rounded-sm bg-muted/70 px-1 text-[10px] text-muted-foreground/70 shadow-none">
+                        {isMacPlatform(navigator.platform) ? "\u2318" : "Ctrl"}
+                      </Kbd>
+                      <Kbd className="h-4.5 min-w-4.5 rounded-sm bg-muted/70 px-1 text-[10px] text-muted-foreground/70 shadow-none">
+                        L
+                      </Kbd>
+                    </KbdGroup>
+                    <span>to focus</span>
+                  </div>
+                ) : null}
                 {activePendingApproval ? (
                   <div className="rounded-t-[19px] border-b border-border/65 bg-muted/20">
                     <ComposerPendingApprovalPanel
@@ -3853,6 +3967,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                                 effort={selectedEffort}
                                 fastModeEnabled={selectedCodexFastModeEnabled}
                                 options={reasoningOptions}
+                                shortcut={reasoningShortcut}
                                 onEffortChange={onEffortSelect}
                                 onFastModeChange={onCodexFastModeChange}
                               />
@@ -3864,23 +3979,32 @@ export default function ChatView({ threadId }: ChatViewProps) {
                             className="mx-0.5 hidden h-4 sm:block"
                           />
 
-                          <Button
-                            variant="ghost"
-                            className="shrink-0 whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:px-3"
-                            size="sm"
-                            type="button"
-                            onClick={toggleInteractionMode}
-                            title={
+                          <KbdTooltip
+                            label={
                               interactionMode === "plan"
-                                ? "Plan mode — click to return to normal chat mode"
-                                : "Default mode — click to enter plan mode"
+                                ? "Switch to chat mode"
+                                : "Switch to plan mode"
                             }
+                            shortcut={["Shift", "Tab"]}
                           >
-                            <BotIcon />
-                            <span className="sr-only sm:not-sr-only">
-                              {interactionMode === "plan" ? "Plan" : "Chat"}
-                            </span>
-                          </Button>
+                            <Button
+                              variant="ghost"
+                              className={cn(
+                                "shrink-0 whitespace-nowrap px-2 sm:px-3",
+                                interactionMode === "plan"
+                                  ? "text-primary hover:text-primary"
+                                  : "text-muted-foreground/70 hover:text-foreground/80",
+                              )}
+                              size="sm"
+                              type="button"
+                              onClick={toggleInteractionMode}
+                            >
+                              {interactionMode === "plan" ? <MapIcon /> : <BotIcon />}
+                              <span className="sr-only sm:not-sr-only">
+                                {interactionMode === "plan" ? "Plan" : "Chat"}
+                              </span>
+                            </Button>
+                          </KbdTooltip>
 
                           <Separator
                             orientation="vertical"
@@ -5731,27 +5855,32 @@ const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         setIsMenuOpen(open);
       }}
     >
-      <MenuTrigger
-        render={
-          <Button
-            size="sm"
-            variant="ghost"
-            className={cn(
-              "min-w-0 shrink-0 whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80",
-              props.compact ? "max-w-42" : "sm:px-3",
-            )}
-            disabled={props.disabled}
-          />
-        }
-      >
-        <span
-          className={cn("flex min-w-0 items-center gap-2", props.compact ? "max-w-36" : undefined)}
+      <KbdTooltip label="Choose model">
+        <MenuTrigger
+          render={
+            <Button
+              size="sm"
+              variant="ghost"
+              className={cn(
+                "min-w-0 shrink-0 whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80",
+                props.compact ? "max-w-42" : "sm:px-3",
+              )}
+              disabled={props.disabled}
+            />
+          }
         >
-          <ProviderIcon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground/70" />
-          <span className="truncate">{selectedModelLabel}</span>
-          <ChevronDownIcon aria-hidden="true" className="size-3 opacity-60" />
-        </span>
-      </MenuTrigger>
+          <span
+            className={cn(
+              "flex min-w-0 items-center gap-2",
+              props.compact ? "max-w-36" : undefined,
+            )}
+          >
+            <ProviderIcon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground/70" />
+            <span className="truncate">{selectedModelLabel}</span>
+            <ChevronDownIcon aria-hidden="true" className="size-3 opacity-60" />
+          </span>
+        </MenuTrigger>
+      </KbdTooltip>
       <MenuPopup align="start">
         {AVAILABLE_PROVIDER_OPTIONS.map((option) => {
           const OptionIcon = PROVIDER_ICON_BY_PROVIDER[option.value];
@@ -5956,6 +6085,7 @@ const CodexTraitsPicker = memo(function CodexTraitsPicker(props: {
   effort: CodexReasoningEffort;
   fastModeEnabled: boolean;
   options: ReadonlyArray<CodexReasoningEffort>;
+  shortcut?: React.ReactNode | ReadonlyArray<React.ReactNode>;
   onEffortChange: (effort: CodexReasoningEffort) => void;
   onFastModeChange: (enabled: boolean) => void;
 }) {
@@ -5981,18 +6111,20 @@ const CodexTraitsPicker = memo(function CodexTraitsPicker(props: {
         setIsMenuOpen(open);
       }}
     >
-      <MenuTrigger
-        render={
-          <Button
-            size="sm"
-            variant="ghost"
-            className="shrink-0 whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:px-3"
-          />
-        }
-      >
-        <span>{triggerLabel}</span>
-        <ChevronDownIcon aria-hidden="true" className="size-3 opacity-60" />
-      </MenuTrigger>
+      <KbdTooltip label="Reasoning effort" shortcut={props.shortcut}>
+        <MenuTrigger
+          render={
+            <Button
+              size="sm"
+              variant="ghost"
+              className="shrink-0 whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:px-3"
+            />
+          }
+        >
+          <span>{triggerLabel}</span>
+          <ChevronDownIcon aria-hidden="true" className="size-3 opacity-60" />
+        </MenuTrigger>
+      </KbdTooltip>
       <MenuPopup align="start">
         <MenuGroup>
           <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Reasoning</div>

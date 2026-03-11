@@ -1,0 +1,4 @@
+interface:
+  display_name: "Daytona Images and Storage"
+  short_description: "Build reproducible Daytona images, snapshots, and volumes."
+  default_prompt: "Use $daytona-images-storage to design Daytona declarative images, Dockerfile-based environments, snapshots, and volumes for reproducible sandboxes."

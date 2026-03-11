@@ -1,0 +1,4 @@
+interface:
+  display_name: "Daytona Foundations"
+  short_description: "Set up Daytona auth, config, and interface choices."
+  default_prompt: "Use $daytona-foundations to set up Daytona with the SDK, CLI, API, or MCP server and debug basic configuration issues."

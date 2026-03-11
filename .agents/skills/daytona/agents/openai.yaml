@@ -1,0 +1,4 @@
+interface:
+  display_name: "Daytona"
+  short_description: "Route Daytona work to the right sandbox or platform subskill."
+  default_prompt: "Help me choose the right Daytona skill and workflow for sandbox setup, execution, persistence, computer use, agent integrations, or platform operations."

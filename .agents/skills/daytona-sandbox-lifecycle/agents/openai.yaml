@@ -1,0 +1,4 @@
+interface:
+  display_name: "Daytona Sandbox Lifecycle"
+  short_description: "Create, run, inspect, and clean up Daytona sandboxes."
+  default_prompt: "Use $daytona-sandbox-lifecycle to manage Daytona sandboxes, run commands and processes, and handle files or Git inside a sandbox."

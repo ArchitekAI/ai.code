@@ -1,0 +1,4 @@
+interface:
+  display_name: "Daytona Agent Integrations"
+  short_description: "Connect Daytona sandboxes to coding agents and MCP workflows."
+  default_prompt: "Use $daytona-agent-integrations to wire Daytona into agent systems, MCP toolchains, and frameworks like LangChain, Mastra, Claude Agent SDK, or Google ADK."
