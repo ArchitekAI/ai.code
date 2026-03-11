@@ -4,6 +4,10 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { gitBranchesQueryOptions } from "../lib/gitReactQuery";
+import {
+  DEFAULT_PULL_REQUEST_PROMPT_TEMPLATE,
+  PULL_REQUEST_PROMPT_PLACEHOLDERS,
+} from "../lib/pullRequestPrompt";
 import { newCommandId } from "../lib/utils";
 import { ensureNativeApi } from "../nativeApi";
 import { useStore } from "../store";
@@ -21,6 +25,8 @@ import {
 } from "../components/ui/select";
 import { toastManager } from "../components/ui/toast";
 import { Separator } from "../components/ui/separator";
+import { Button } from "../components/ui/button";
+import { Textarea } from "../components/ui/textarea";
 import { isElectron } from "../env";
 
 const UNSET_BRANCH_VALUE = "__unset__";
@@ -64,7 +70,10 @@ function RepoSettingsRouteView() {
   const projects = useStore((store) => store.projects);
   const project = projects.find((entry) => entry.id === projectId) ?? null;
   const branchesQuery = useQuery(gitBranchesQueryOptions(project?.cwd ?? null));
-  const [savingField, setSavingField] = useState<"worktree" | "pr" | null>(null);
+  const [savingField, setSavingField] = useState<"worktree" | "pr" | "template" | null>(null);
+  const [pullRequestPromptTemplateDraft, setPullRequestPromptTemplateDraft] = useState(
+    project?.pullRequestPromptTemplate ?? DEFAULT_PULL_REQUEST_PROMPT_TEMPLATE,
+  );
 
   useEffect(() => {
     if (project) {
@@ -72,6 +81,12 @@ function RepoSettingsRouteView() {
     }
     void navigate({ to: "/", replace: true });
   }, [navigate, project]);
+
+  useEffect(() => {
+    setPullRequestPromptTemplateDraft(
+      project?.pullRequestPromptTemplate ?? DEFAULT_PULL_REQUEST_PROMPT_TEMPLATE,
+    );
+  }, [project?.id, project?.pullRequestPromptTemplate]);
 
   const gitBranches = useMemo(
     () => dedupeRemoteBranchesWithLocalMatches(branchesQuery.data?.branches ?? []),
@@ -115,10 +130,11 @@ function RepoSettingsRouteView() {
 
   const updateProjectSettings = useCallback(
     async (
-      field: "worktree" | "pr",
+      field: "worktree" | "pr" | "template",
       patch: {
         defaultWorktreeBaseBranch?: string | null;
         defaultPullRequestBaseBranch?: string | null;
+        pullRequestPromptTemplate?: string | null;
       },
     ) => {
       if (!project) {
@@ -149,6 +165,14 @@ function RepoSettingsRouteView() {
   if (!project) {
     return null;
   }
+
+  const normalizedPromptTemplateDraft = pullRequestPromptTemplateDraft.trim();
+  const savedPromptTemplate =
+    project.pullRequestPromptTemplate ?? DEFAULT_PULL_REQUEST_PROMPT_TEMPLATE;
+  const canSavePromptTemplate =
+    normalizedPromptTemplateDraft.length > 0 &&
+    normalizedPromptTemplateDraft !== savedPromptTemplate;
+  const canResetPromptTemplate = project.pullRequestPromptTemplate !== null;
 
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground isolate">
@@ -257,6 +281,66 @@ function RepoSettingsRouteView() {
                       ))}
                     </SelectContent>
                   </Select>
+                </div>
+
+                <Separator />
+
+                <div className="space-y-3">
+                  <div>
+                    <h2 className="text-sm font-medium text-foreground">PR prompt template</h2>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Used by the worktree Checks tab and the{" "}
+                      <span className="font-mono">Cmd+Shift+P</span> shortcut when sending PR
+                      instructions to the focused thread.
+                    </p>
+                  </div>
+                  <Textarea
+                    value={pullRequestPromptTemplateDraft}
+                    onChange={(event) => setPullRequestPromptTemplateDraft(event.target.value)}
+                    rows={14}
+                    className="font-mono text-xs"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Supported placeholders:{" "}
+                    {PULL_REQUEST_PROMPT_PLACEHOLDERS.map((placeholder, index) => (
+                      <span key={placeholder}>
+                        <span className="font-mono text-foreground">{placeholder}</span>
+                        {index < PULL_REQUEST_PROMPT_PLACEHOLDERS.length - 1 ? ", " : ""}
+                      </span>
+                    ))}
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={savingField === "template" || !canSavePromptTemplate}
+                      onClick={() => {
+                        const nextTemplate =
+                          normalizedPromptTemplateDraft === DEFAULT_PULL_REQUEST_PROMPT_TEMPLATE
+                            ? null
+                            : normalizedPromptTemplateDraft;
+                        void updateProjectSettings("template", {
+                          pullRequestPromptTemplate: nextTemplate,
+                        });
+                      }}
+                    >
+                      Save
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={savingField === "template" || !canResetPromptTemplate}
+                      onClick={() => {
+                        setPullRequestPromptTemplateDraft(DEFAULT_PULL_REQUEST_PROMPT_TEMPLATE);
+                        void updateProjectSettings("template", {
+                          pullRequestPromptTemplate: null,
+                        });
+                      }}
+                    >
+                      Reset to default
+                    </Button>
+                  </div>
                 </div>
               </div>
             </section>

@@ -372,6 +372,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             defaultModel: event.payload.defaultModel,
             defaultWorktreeBaseBranch: event.payload.defaultWorktreeBaseBranch,
             defaultPullRequestBaseBranch: event.payload.defaultPullRequestBaseBranch,
+            pullRequestPromptTemplate: event.payload.pullRequestPromptTemplate,
             scripts: event.payload.scripts,
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
@@ -400,6 +401,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               : {}),
             ...(event.payload.defaultPullRequestBaseBranch !== undefined
               ? { defaultPullRequestBaseBranch: event.payload.defaultPullRequestBaseBranch }
+              : {}),
+            ...(event.payload.pullRequestPromptTemplate !== undefined
+              ? { pullRequestPromptTemplate: event.payload.pullRequestPromptTemplate }
               : {}),
             ...(event.payload.scripts !== undefined ? { scripts: event.payload.scripts } : {}),
             updatedAt: event.payload.updatedAt,

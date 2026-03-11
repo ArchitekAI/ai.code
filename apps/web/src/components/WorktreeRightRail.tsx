@@ -16,10 +16,11 @@ import {
   Trash2Icon,
   XIcon,
 } from "lucide-react";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useTheme } from "../hooks/useTheme";
+import { sendCreatePullRequestPrompt } from "../lib/pullRequestPrompt";
 import { formatRelativeTime } from "../lib/relativeTime";
 import { projectListEntriesQueryOptions } from "../lib/projectReactQuery";
 import { sendWorktreeThreadPrompt } from "../lib/sendWorktreeThreadPrompt";
@@ -32,7 +33,11 @@ import {
   type WorktreeExplorerRow,
   type WorktreeExplorerStat,
 } from "../lib/worktreeExplorer";
-import { gitStatusQueryOptions, invalidateGitQueries } from "../lib/gitReactQuery";
+import {
+  gitBranchesQueryOptions,
+  gitStatusQueryOptions,
+  invalidateGitQueries,
+} from "../lib/gitReactQuery";
 import {
   gitUpdatePullRequestMutationOptions,
   worktreeChecksAddTodoMutationOptions,
@@ -58,6 +63,8 @@ interface WorktreeRightRailProps {
   cwd: string | null;
   projectId: ProjectId | null;
   projectModel: string | null;
+  defaultPullRequestBaseBranch: string | null;
+  pullRequestPromptTemplate: string | null;
   focusedThreadId: ThreadId | null;
   focusedThreadIsServer: boolean;
   railState: WorktreeRightRailState;
@@ -277,6 +284,8 @@ export default function WorktreeRightRail({
   cwd,
   projectId,
   projectModel,
+  defaultPullRequestBaseBranch,
+  pullRequestPromptTemplate,
   focusedThreadId,
   focusedThreadIsServer,
   railState,
@@ -293,8 +302,10 @@ export default function WorktreeRightRail({
   const [newTodoText, setNewTodoText] = useState("");
   const [editingPrTitle, setEditingPrTitle] = useState("");
   const [editingPrBody, setEditingPrBody] = useState("");
+  const [isCreatingPullRequest, setIsCreatingPullRequest] = useState(false);
 
   const allFilesQuery = useQuery(projectListEntriesQueryOptions({ cwd, enabled: cwd !== null }));
+  const branchListQuery = useQuery(gitBranchesQueryOptions(cwd));
   const gitStatusQuery = useQuery(gitStatusQueryOptions(cwd));
   const checksQuery = useQuery(
     worktreeChecksQueryOptions({
@@ -329,7 +340,6 @@ export default function WorktreeRightRail({
       queryClient,
     }),
   );
-
   const allFilesEntries = useMemo<WorktreeExplorerEntry[]>(
     () =>
       (allFilesQuery.data?.entries ?? []).map((entry) => ({ path: entry.path, kind: entry.kind })),
@@ -383,6 +393,43 @@ export default function WorktreeRightRail({
   );
   const checksData = checksQuery.data;
   const currentPullRequest = checksData?.pr ?? null;
+  const gitStatusForPullRequestAction = checksData?.gitStatus ?? gitStatusQuery.data ?? null;
+  const isDefaultBranch = useMemo(() => {
+    const branchName = gitStatusForPullRequestAction?.branch;
+    if (!branchName) return false;
+    const currentBranch = branchListQuery.data?.branches.find(
+      (branch) => branch.name === branchName,
+    );
+    return currentBranch?.isDefault ?? (branchName === "main" || branchName === "master");
+  }, [branchListQuery.data?.branches, gitStatusForPullRequestAction?.branch]);
+  const prAction = useMemo(() => {
+    const gitStatus = gitStatusForPullRequestAction;
+    if (gitStatus?.pr?.state === "open") {
+      return { label: "Open PR", disabled: false, kind: "open_pr" as const };
+    }
+
+    if (!gitStatus) {
+      return {
+        label: "Create PR",
+        disabled: true,
+        kind: "create_pr" as const,
+      };
+    }
+
+    if (!gitStatus.branch || isDefaultBranch) {
+      return {
+        label: "Create PR",
+        disabled: true,
+        kind: "create_pr" as const,
+      };
+    }
+
+    return {
+      label: "Create PR",
+      disabled: false,
+      kind: "create_pr" as const,
+    };
+  }, [gitStatusForPullRequestAction, isDefaultBranch]);
 
   useEffect(() => {
     if (!currentPullRequest) {
@@ -411,12 +458,99 @@ export default function WorktreeRightRail({
     });
   };
 
-  const openExternalUrl = async (url: string | null) => {
+  const openExternalUrl = useCallback(async (url: string | null) => {
     if (!url) return;
     const api = readNativeApi();
     if (!api) return;
     await api.shell.openExternal(url);
-  };
+  }, []);
+
+  const openPullRequest = useCallback(() => {
+    void openExternalUrl(
+      currentPullRequest?.url ??
+        (gitStatusForPullRequestAction?.pr?.state === "open"
+          ? gitStatusForPullRequestAction.pr.url
+          : null),
+    );
+  }, [
+    currentPullRequest?.url,
+    gitStatusForPullRequestAction?.pr?.state,
+    gitStatusForPullRequestAction?.pr?.url,
+    openExternalUrl,
+  ]);
+
+  const createPullRequest = useCallback(async () => {
+    if (!cwd || !focusedThreadId || !projectId || !projectModel) {
+      toastManager.add({
+        type: "warning",
+        title: "No active thread",
+        description: "Open or create a worktree thread first.",
+      });
+      return;
+    }
+
+    if (!focusedThreadId || !projectId || !projectModel) {
+      return;
+    }
+
+    if (!cwd) {
+      toastManager.add({
+        type: "error",
+        title: "Pull request creation is unavailable.",
+      });
+      return;
+    }
+
+    const toastId = toastManager.add({
+      type: "loading",
+      title: "Sending PR instructions...",
+      timeout: 0,
+    });
+
+    setIsCreatingPullRequest(true);
+    try {
+      await sendCreatePullRequestPrompt({
+        queryClient,
+        cwd,
+        worktreeId,
+        projectId,
+        projectModel,
+        targetThreadId: focusedThreadId,
+        isServerThread: focusedThreadIsServer,
+        draftThread,
+        defaultPullRequestBaseBranch,
+        promptTemplate: pullRequestPromptTemplate,
+      });
+      toastManager.update(toastId, {
+        type: "success",
+        title: "PR instructions sent",
+        description: "The focused thread can take over PR creation from here.",
+        timeout: 0,
+        data: {
+          dismissAfterVisibleMs: 10_000,
+        },
+      });
+    } catch (error) {
+      toastManager.update(toastId, {
+        type: "error",
+        title: "Could not send PR instructions",
+        description: error instanceof Error ? error.message : "An unknown error occurred.",
+      });
+    } finally {
+      setIsCreatingPullRequest(false);
+    }
+  }, [
+    cwd,
+    defaultPullRequestBaseBranch,
+    draftThread,
+    focusedThreadId,
+    focusedThreadIsServer,
+    projectId,
+    projectModel,
+    pullRequestPromptTemplate,
+    queryClient,
+    worktreeId,
+  ]);
 
   const sendPrompt = async (prompt: string) => {
     if (!focusedThreadId || !projectId || !projectModel) {
@@ -667,17 +801,38 @@ export default function WorktreeRightRail({
                       size="sm"
                       variant="ghost"
                       onClick={() => {
-                        void openExternalUrl(currentPullRequest?.url ?? null);
+                        openPullRequest();
                       }}
                     >
-                      PR
+                      Open PR
                       <ExternalLinkIcon className="ml-1.5 size-3" />
                     </Button>
                   </div>
                 </div>
               ) : (
                 <div className="rounded-lg border border-border/60 bg-background/40 p-3 text-sm text-muted-foreground">
-                  No open pull request for this worktree.
+                  <p>No open pull request for this worktree.</p>
+                  {prAction ? (
+                    <div className="mt-3">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={prAction.disabled || isCreatingPullRequest}
+                        onClick={() => {
+                          if (prAction.kind === "open_pr") {
+                            openPullRequest();
+                            return;
+                          }
+                          void createPullRequest();
+                        }}
+                      >
+                        {isCreatingPullRequest ? (
+                          <LoaderIcon className="mr-1.5 size-3 animate-spin" />
+                        ) : null}
+                        {prAction.label}
+                      </Button>
+                    </div>
+                  ) : null}
                 </div>
               )}
 

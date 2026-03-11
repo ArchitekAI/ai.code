@@ -38,7 +38,17 @@ export interface ChatImageAttachment {
   previewUrl?: string;
 }
 
-export type ChatAttachment = ChatImageAttachment;
+export interface ChatTextAttachment {
+  type: "text";
+  id: string;
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+  previewText: string;
+  url: string;
+}
+
+export type ChatAttachment = ChatImageAttachment | ChatTextAttachment;
 
 export interface ChatMessage {
   id: MessageId;
@@ -83,6 +93,7 @@ export interface Project {
   model: string;
   defaultWorktreeBaseBranch: string | null;
   defaultPullRequestBaseBranch: string | null;
+  pullRequestPromptTemplate: string | null;
   expanded: boolean;
   scripts: ProjectScript[];
 }

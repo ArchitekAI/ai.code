@@ -21,6 +21,7 @@ function status(overrides: Partial<GitStatusResult> = {}): GitStatusResult {
       deletions: 0,
     },
     hasUpstream: true,
+    upstreamBranch: "origin/feature/test",
     aheadCount: 0,
     behindCount: 0,
     pr: null,

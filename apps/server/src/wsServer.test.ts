@@ -1684,6 +1684,7 @@ describe("WebSocket Server", () => {
         deletions: 2,
       },
       hasUpstream: false,
+      upstreamBranch: null,
       aheadCount: 0,
       behindCount: 0,
       pr: null,

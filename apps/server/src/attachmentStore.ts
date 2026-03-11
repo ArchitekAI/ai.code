@@ -9,7 +9,12 @@ import {
 } from "./attachmentPaths.ts";
 import { inferImageExtension, SAFE_IMAGE_FILE_EXTENSIONS } from "./imageMime.ts";
 
-const ATTACHMENT_FILENAME_EXTENSIONS = [...SAFE_IMAGE_FILE_EXTENSIONS, ".bin"];
+const SAFE_TEXT_FILE_EXTENSIONS = new Set([".md", ".markdown", ".txt"]);
+const ATTACHMENT_FILENAME_EXTENSIONS = [
+  ...SAFE_IMAGE_FILE_EXTENSIONS,
+  ...SAFE_TEXT_FILE_EXTENSIONS,
+  ".bin",
+];
 const ATTACHMENT_ID_THREAD_SEGMENT_MAX_CHARS = 80;
 const ATTACHMENT_ID_THREAD_SEGMENT_PATTERN = "[a-z0-9_]+(?:-[a-z0-9_]+)*";
 const ATTACHMENT_ID_UUID_PATTERN = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
@@ -60,6 +65,14 @@ export function attachmentRelativePath(attachment: ChatAttachment): string {
         mimeType: attachment.mimeType,
         fileName: attachment.name,
       });
+      return `${attachment.id}${extension}`;
+    }
+    case "text": {
+      const extensionMatch = /\.([a-z0-9]{1,16})$/i.exec(attachment.name.trim());
+      const fileNameExtension = extensionMatch ? `.${extensionMatch[1]!.toLowerCase()}` : "";
+      const extension = SAFE_TEXT_FILE_EXTENSIONS.has(fileNameExtension)
+        ? fileNameExtension
+        : ".md";
       return `${attachment.id}${extension}`;
     }
   }

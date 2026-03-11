@@ -160,6 +160,7 @@ export const GitStatusResult = Schema.Struct({
     deletions: NonNegativeInt,
   }),
   hasUpstream: Schema.Boolean,
+  upstreamBranch: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
   aheadCount: NonNegativeInt,
   behindCount: NonNegativeInt,
   pr: Schema.NullOr(GitStatusPr),

@@ -150,6 +150,7 @@ function mapProjectsFromReadModel(
         resolveModelSlug(project.defaultModel ?? DEFAULT_MODEL_BY_PROVIDER.codex),
       defaultWorktreeBaseBranch: project.defaultWorktreeBaseBranch,
       defaultPullRequestBaseBranch: project.defaultPullRequestBaseBranch,
+      pullRequestPromptTemplate: project.pullRequestPromptTemplate,
       expanded:
         existing?.expanded ??
         (persistedExpandedProjectCwds.size > 0
@@ -316,14 +317,26 @@ function mapThreadsFromReadModel(input: {
           }
         : null,
       messages: thread.messages.map((message) => {
-        const attachments = message.attachments?.map((attachment) => ({
-          type: "image" as const,
-          id: attachment.id,
-          name: attachment.name,
-          mimeType: attachment.mimeType,
-          sizeBytes: attachment.sizeBytes,
-          previewUrl: toAttachmentPreviewUrl(attachmentPreviewRoutePath(attachment.id)),
-        }));
+        const attachments = message.attachments?.map((attachment) =>
+          attachment.type === "image"
+            ? {
+                type: "image" as const,
+                id: attachment.id,
+                name: attachment.name,
+                mimeType: attachment.mimeType,
+                sizeBytes: attachment.sizeBytes,
+                previewUrl: toAttachmentPreviewUrl(attachmentPreviewRoutePath(attachment.id)),
+              }
+            : {
+                type: "text" as const,
+                id: attachment.id,
+                name: attachment.name,
+                mimeType: attachment.mimeType,
+                sizeBytes: attachment.sizeBytes,
+                previewText: attachment.previewText,
+                url: toAttachmentPreviewUrl(attachmentPreviewRoutePath(attachment.id)),
+              },
+        );
         const normalizedMessage: ChatMessage = {
           id: message.id,
           role: message.role,

@@ -5580,46 +5580,91 @@ const MessagesTimeline = memo(function MessagesTimeline({
       {row.kind === "message" &&
         row.message.role === "user" &&
         (() => {
-          const userImages = row.message.attachments ?? [];
+          const userAttachments = row.message.attachments ?? [];
+          const userTextAttachments = userAttachments.filter(
+            (
+              attachment,
+            ): attachment is Extract<
+              NonNullable<TimelineMessage["attachments"]>[number],
+              { type: "text" }
+            > => attachment.type === "text",
+          );
+          const userImages = userAttachments.filter(
+            (
+              attachment,
+            ): attachment is Extract<
+              NonNullable<TimelineMessage["attachments"]>[number],
+              { type: "image" }
+            > => attachment.type === "image",
+          );
           const canRevertAgentWork = revertTurnCountByUserMessageId.has(row.message.id);
           return (
             <div className="flex justify-end">
               <div className="group relative max-w-[80%] rounded-2xl rounded-br-sm border border-border bg-secondary px-4 py-3">
+                {userTextAttachments.length > 0 && (
+                  <div className="mb-3 flex max-w-[420px] flex-col gap-2">
+                    {userTextAttachments.map((attachment) => (
+                      <button
+                        key={attachment.id}
+                        type="button"
+                        className="flex w-full min-w-0 items-center gap-3 rounded-xl border border-border/80 bg-background/70 px-3 py-2 text-left transition-colors hover:bg-background/85"
+                        onClick={() => {
+                          const api = readNativeApi();
+                          if (api) {
+                            void api.shell.openExternal(attachment.url);
+                            return;
+                          }
+                          window.open(attachment.url, "_blank", "noopener,noreferrer");
+                        }}
+                      >
+                        <span className="flex size-11 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-card/90">
+                          <FileIcon className="size-5 text-muted-foreground" />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-medium text-foreground">
+                            {attachment.name}
+                          </span>
+                          <span className="mt-0.5 block line-clamp-2 whitespace-pre-wrap break-words text-xs text-muted-foreground">
+                            {attachment.previewText || "Open attachment"}
+                          </span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
                 {userImages.length > 0 && (
                   <div className="mb-2 grid max-w-[420px] grid-cols-2 gap-2">
-                    {userImages.map(
-                      (image: NonNullable<TimelineMessage["attachments"]>[number]) => (
-                        <div
-                          key={image.id}
-                          className="overflow-hidden rounded-lg border border-border/80 bg-background/70"
-                        >
-                          {image.previewUrl ? (
-                            <button
-                              type="button"
-                              className="h-full w-full cursor-zoom-in"
-                              aria-label={`Preview ${image.name}`}
-                              onClick={() => {
-                                const preview = buildExpandedImagePreview(userImages, image.id);
-                                if (!preview) return;
-                                onImageExpand(preview);
-                              }}
-                            >
-                              <img
-                                src={image.previewUrl}
-                                alt={image.name}
-                                className="h-full max-h-[220px] w-full object-cover"
-                                onLoad={onTimelineImageLoad}
-                                onError={onTimelineImageLoad}
-                              />
-                            </button>
-                          ) : (
-                            <div className="flex min-h-[72px] items-center justify-center px-2 py-3 text-center text-[11px] text-muted-foreground/70">
-                              {image.name}
-                            </div>
-                          )}
-                        </div>
-                      ),
-                    )}
+                    {userImages.map((image) => (
+                      <div
+                        key={image.id}
+                        className="overflow-hidden rounded-lg border border-border/80 bg-background/70"
+                      >
+                        {image.previewUrl ? (
+                          <button
+                            type="button"
+                            className="h-full w-full cursor-zoom-in"
+                            aria-label={`Preview ${image.name}`}
+                            onClick={() => {
+                              const preview = buildExpandedImagePreview(userImages, image.id);
+                              if (!preview) return;
+                              onImageExpand(preview);
+                            }}
+                          >
+                            <img
+                              src={image.previewUrl}
+                              alt={image.name}
+                              className="h-full max-h-[220px] w-full object-cover"
+                              onLoad={onTimelineImageLoad}
+                              onError={onTimelineImageLoad}
+                            />
+                          </button>
+                        ) : (
+                          <div className="flex min-h-[72px] items-center justify-center px-2 py-3 text-center text-[11px] text-muted-foreground/70">
+                            {image.name}
+                          </div>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 )}
                 {row.message.text && (

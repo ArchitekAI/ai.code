@@ -70,6 +70,7 @@ function createMinimalSnapshot(): OrchestrationReadModel {
         defaultModel: "gpt-5",
         defaultWorktreeBaseBranch: null,
         defaultPullRequestBaseBranch: null,
+        pullRequestPromptTemplate: null,
         scripts: [],
         createdAt: NOW_ISO,
         updatedAt: NOW_ISO,

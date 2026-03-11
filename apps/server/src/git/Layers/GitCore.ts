@@ -808,6 +808,7 @@ const makeGitCore = Effect.gen(function* () {
       return {
         branch,
         upstreamRef,
+        upstreamBranch: upstreamRef,
         hasWorkingTreeChanges,
         hasMergeConflicts,
         workingTree: {
@@ -829,6 +830,7 @@ const makeGitCore = Effect.gen(function* () {
         hasMergeConflicts: details.hasMergeConflicts,
         workingTree: details.workingTree,
         hasUpstream: details.hasUpstream,
+        upstreamBranch: details.upstreamRef,
         aheadCount: details.aheadCount,
         behindCount: details.behindCount,
         pr: null,

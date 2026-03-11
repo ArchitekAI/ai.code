@@ -205,6 +205,7 @@ export function projectEvent(
             defaultModel: payload.defaultModel,
             defaultWorktreeBaseBranch: payload.defaultWorktreeBaseBranch,
             defaultPullRequestBaseBranch: payload.defaultPullRequestBaseBranch,
+            pullRequestPromptTemplate: payload.pullRequestPromptTemplate,
             scripts: payload.scripts,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
@@ -245,6 +246,9 @@ export function projectEvent(
                     : {}),
                   ...(payload.defaultPullRequestBaseBranch !== undefined
                     ? { defaultPullRequestBaseBranch: payload.defaultPullRequestBaseBranch }
+                    : {}),
+                  ...(payload.pullRequestPromptTemplate !== undefined
+                    ? { pullRequestPromptTemplate: payload.pullRequestPromptTemplate }
                     : {}),
                   ...(payload.scripts !== undefined ? { scripts: payload.scripts } : {}),
                   updatedAt: payload.updatedAt,

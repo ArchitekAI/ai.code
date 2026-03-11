@@ -74,7 +74,9 @@ export type ProviderUserInputAnswers = typeof ProviderUserInputAnswers.Type;
 export const PROVIDER_SEND_TURN_MAX_INPUT_CHARS = 120_000;
 export const PROVIDER_SEND_TURN_MAX_ATTACHMENTS = 8;
 export const PROVIDER_SEND_TURN_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+export const PROVIDER_SEND_TURN_MAX_TEXT_ATTACHMENT_CHARS = PROVIDER_SEND_TURN_MAX_INPUT_CHARS;
 const PROVIDER_SEND_TURN_MAX_IMAGE_DATA_URL_CHARS = 14_000_000;
+const CHAT_TEXT_ATTACHMENT_PREVIEW_MAX_CHARS = 280;
 const CHAT_ATTACHMENT_ID_MAX_CHARS = 128;
 // Correlation id is command id by design in this model.
 export const CorrelationId = CommandId;
@@ -95,6 +97,19 @@ export const ChatImageAttachment = Schema.Struct({
 });
 export type ChatImageAttachment = typeof ChatImageAttachment.Type;
 
+export const ChatTextAttachment = Schema.Struct({
+  type: Schema.Literal("text"),
+  id: ChatAttachmentId,
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
+  mimeType: TrimmedNonEmptyString.check(
+    Schema.isMaxLength(100),
+    Schema.isPattern(/^text\/markdown$/i),
+  ),
+  sizeBytes: NonNegativeInt,
+  previewText: Schema.String.check(Schema.isMaxLength(CHAT_TEXT_ATTACHMENT_PREVIEW_MAX_CHARS)),
+});
+export type ChatTextAttachment = typeof ChatTextAttachment.Type;
+
 const UploadChatImageAttachment = Schema.Struct({
   type: Schema.Literal("image"),
   name: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
@@ -106,9 +121,20 @@ const UploadChatImageAttachment = Schema.Struct({
 });
 export type UploadChatImageAttachment = typeof UploadChatImageAttachment.Type;
 
-export const ChatAttachment = Schema.Union([ChatImageAttachment]);
+export const UploadChatTextAttachment = Schema.Struct({
+  type: Schema.Literal("text"),
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
+  mimeType: TrimmedNonEmptyString.check(
+    Schema.isMaxLength(100),
+    Schema.isPattern(/^text\/markdown$/i),
+  ),
+  text: Schema.String.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_TEXT_ATTACHMENT_CHARS)),
+});
+export type UploadChatTextAttachment = typeof UploadChatTextAttachment.Type;
+
+export const ChatAttachment = Schema.Union([ChatImageAttachment, ChatTextAttachment]);
 export type ChatAttachment = typeof ChatAttachment.Type;
-const UploadChatAttachment = Schema.Union([UploadChatImageAttachment]);
+const UploadChatAttachment = Schema.Union([UploadChatImageAttachment, UploadChatTextAttachment]);
 export type UploadChatAttachment = typeof UploadChatAttachment.Type;
 
 export const ProjectScriptIcon = Schema.Literals([
@@ -142,6 +168,9 @@ export const OrchestrationProject = Schema.Struct({
   defaultPullRequestBaseBranch: Schema.NullOr(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(() => null),
   ),
+  pullRequestPromptTemplate: Schema.NullOr(
+    Schema.String.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)),
+  ).pipe(Schema.withDecodingDefault(() => null)),
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -324,6 +353,9 @@ const ProjectMetaUpdateCommand = Schema.Struct({
   defaultModel: Schema.optional(TrimmedNonEmptyString),
   defaultWorktreeBaseBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   defaultPullRequestBaseBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  pullRequestPromptTemplate: Schema.optional(
+    Schema.NullOr(Schema.String.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS))),
+  ),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
 });
 
@@ -676,6 +708,9 @@ export const ProjectCreatedPayload = Schema.Struct({
   defaultPullRequestBaseBranch: Schema.NullOr(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(() => null),
   ),
+  pullRequestPromptTemplate: Schema.NullOr(
+    Schema.String.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)),
+  ).pipe(Schema.withDecodingDefault(() => null)),
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -688,6 +723,9 @@ export const ProjectMetaUpdatedPayload = Schema.Struct({
   defaultModel: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   defaultWorktreeBaseBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   defaultPullRequestBaseBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  pullRequestPromptTemplate: Schema.optional(
+    Schema.NullOr(Schema.String.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS))),
+  ),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
   updatedAt: IsoDateTime,
 });

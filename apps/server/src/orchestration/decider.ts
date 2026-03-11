@@ -88,6 +88,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             defaultModel: command.defaultModel ?? null,
             defaultWorktreeBaseBranch: null,
             defaultPullRequestBaseBranch: null,
+            pullRequestPromptTemplate: null,
             scripts: [],
             createdAt: command.createdAt,
             updatedAt: command.createdAt,
@@ -143,6 +144,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
               : {}),
             ...(command.defaultPullRequestBaseBranch !== undefined
               ? { defaultPullRequestBaseBranch: command.defaultPullRequestBaseBranch }
+              : {}),
+            ...(command.pullRequestPromptTemplate !== undefined
+              ? { pullRequestPromptTemplate: command.pullRequestPromptTemplate }
               : {}),
             ...(command.scripts !== undefined ? { scripts: command.scripts } : {}),
             updatedAt: occurredAt,

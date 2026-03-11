@@ -62,6 +62,25 @@ describe("attachmentStore", () => {
     }
   });
 
+  it("resolves markdown attachment paths by id", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3code-attachment-store-"));
+    try {
+      const attachmentId = "thread-1-markdown";
+      const attachmentsDir = path.join(stateDir, "attachments");
+      fs.mkdirSync(attachmentsDir, { recursive: true });
+      const markdownPath = path.join(attachmentsDir, `${attachmentId}.md`);
+      fs.writeFileSync(markdownPath, "# hello\n");
+
+      const resolved = resolveAttachmentPathById({
+        stateDir,
+        attachmentId,
+      });
+      expect(resolved).toBe(markdownPath);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("returns null when no attachment file exists for the id", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3code-attachment-store-"));
     try {

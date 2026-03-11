@@ -4,6 +4,7 @@ import {
   type ProviderInteractionMode,
   type RuntimeMode,
   type ThreadId,
+  type UploadChatAttachment,
   type WorktreeId,
 } from "@repo/contracts";
 
@@ -18,6 +19,7 @@ export async function sendWorktreeThreadPrompt(input: {
   projectId: ProjectId;
   projectModel: string;
   prompt: string;
+  attachments?: UploadChatAttachment[];
   isServerThread: boolean;
   draftThread: DraftThreadState | null;
 }) {
@@ -58,7 +60,7 @@ export async function sendWorktreeThreadPrompt(input: {
       messageId: newMessageId(),
       role: "user",
       text: prompt,
-      attachments: [],
+      attachments: input.attachments ?? [],
     },
     assistantDeliveryMode: "streaming",
     runtimeMode,

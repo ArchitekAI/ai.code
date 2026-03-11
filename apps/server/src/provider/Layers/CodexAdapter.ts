@@ -1323,10 +1323,48 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
 
     const sendTurn: CodexAdapterShape["sendTurn"] = (input) =>
       Effect.gen(function* () {
-        const codexAttachments = yield* Effect.forEach(
-          input.attachments ?? [],
+        const attachmentInputs = input.attachments ?? [];
+        const textAttachmentBlocks = yield* Effect.forEach(
+          attachmentInputs,
           (attachment) =>
             Effect.gen(function* () {
+              if (attachment.type !== "text") {
+                return null;
+              }
+              const attachmentPath = resolveAttachmentPath({
+                stateDir: serverConfig.stateDir,
+                attachment,
+              });
+              if (!attachmentPath) {
+                return yield* toRequestError(
+                  input.threadId,
+                  "turn/start",
+                  new Error(`Invalid attachment id '${attachment.id}'.`),
+                );
+              }
+              const content = yield* fileSystem.readFileString(attachmentPath).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderAdapterRequestError({
+                      provider: PROVIDER,
+                      method: "turn/start",
+                      detail: toMessage(cause, "Failed to read attachment file."),
+                      cause,
+                    }),
+                ),
+              );
+              return `Attached file: ${attachment.name}\n\n${content}`;
+            }),
+          { concurrency: 1 },
+        ).pipe(Effect.map((blocks) => blocks.filter((block): block is string => block !== null)));
+
+        const codexAttachments = yield* Effect.forEach(
+          attachmentInputs,
+          (attachment) =>
+            Effect.gen(function* () {
+              if (attachment.type !== "image") {
+                return null;
+              }
               const attachmentPath = resolveAttachmentPath({
                 stateDir: serverConfig.stateDir,
                 attachment,
@@ -1355,13 +1393,26 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
               };
             }),
           { concurrency: 1 },
+        ).pipe(
+          Effect.map((attachments) =>
+            attachments.filter((entry): entry is { type: "image"; url: string } => entry !== null),
+          ),
         );
+
+        const textAttachmentSection =
+          textAttachmentBlocks.length > 0 ? `\n\n${textAttachmentBlocks.join("\n\n")}` : "";
+        const normalizedInput =
+          input.input !== undefined && input.input.length > 0
+            ? `${input.input}${textAttachmentSection}`
+            : textAttachmentBlocks.length > 0
+              ? textAttachmentBlocks.join("\n\n")
+              : undefined;
 
         return yield* Effect.tryPromise({
           try: () => {
             const managerInput = {
               threadId: input.threadId,
-              ...(input.input !== undefined ? { input: input.input } : {}),
+              ...(normalizedInput !== undefined ? { input: normalizedInput } : {}),
               ...(input.model !== undefined ? { model: input.model } : {}),
               ...(input.modelOptions?.codex?.reasoningEffort !== undefined
                 ? { effort: input.modelOptions.codex.reasoningEffort }

@@ -13,6 +13,7 @@ import Mime from "@effect/platform-node/Mime";
 import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
+  type ChatAttachment,
   type ClientOrchestrationCommand,
   type OrchestrationCommand,
   ORCHESTRATION_WS_CHANNELS,
@@ -106,6 +107,12 @@ export interface ServerShape {
  * Server - Service tag for HTTP/WebSocket lifecycle management.
  */
 export class Server extends ServiceMap.Service<Server, ServerShape>()("t3/wsServer/Server") {}
+
+const TEXT_ATTACHMENT_PREVIEW_MAX_CHARS = 180;
+
+function buildTextAttachmentPreview(text: string): string {
+  return text.replace(/\s+/g, " ").trim().slice(0, TEXT_ATTACHMENT_PREVIEW_MAX_CHARS);
+}
 
 const isServerNotRunningError = (error: Error): boolean => {
   const maybeCode = (error as NodeJS.ErrnoException).code;
@@ -347,20 +354,6 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       turnStartCommand.message.attachments,
       (attachment) =>
         Effect.gen(function* () {
-          const parsed = parseBase64DataUrl(attachment.dataUrl);
-          if (!parsed || !parsed.mimeType.startsWith("image/")) {
-            return yield* new RouteRequestError({
-              message: `Invalid image attachment payload for '${attachment.name}'.`,
-            });
-          }
-
-          const bytes = Buffer.from(parsed.base64, "base64");
-          if (bytes.byteLength === 0 || bytes.byteLength > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
-            return yield* new RouteRequestError({
-              message: `Image attachment '${attachment.name}' is empty or too large.`,
-            });
-          }
-
           const attachmentId = createAttachmentId(turnStartCommand.threadId);
           if (!attachmentId) {
             return yield* new RouteRequestError({
@@ -368,13 +361,47 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
             });
           }
 
-          const persistedAttachment = {
-            type: "image" as const,
-            id: attachmentId,
-            name: attachment.name,
-            mimeType: parsed.mimeType.toLowerCase(),
-            sizeBytes: bytes.byteLength,
-          };
+          let bytes: Buffer;
+          let persistedAttachment: ChatAttachment;
+          if (attachment.type === "image") {
+            const parsed = parseBase64DataUrl(attachment.dataUrl);
+            if (!parsed || !parsed.mimeType.startsWith("image/")) {
+              return yield* new RouteRequestError({
+                message: `Invalid image attachment payload for '${attachment.name}'.`,
+              });
+            }
+
+            bytes = Buffer.from(parsed.base64, "base64");
+            if (bytes.byteLength === 0 || bytes.byteLength > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
+              return yield* new RouteRequestError({
+                message: `Image attachment '${attachment.name}' is empty or too large.`,
+              });
+            }
+
+            persistedAttachment = {
+              type: "image" as const,
+              id: attachmentId,
+              name: attachment.name,
+              mimeType: parsed.mimeType.toLowerCase(),
+              sizeBytes: bytes.byteLength,
+            };
+          } else {
+            bytes = Buffer.from(attachment.text, "utf8");
+            if (bytes.byteLength === 0) {
+              return yield* new RouteRequestError({
+                message: `Text attachment '${attachment.name}' is empty.`,
+              });
+            }
+
+            persistedAttachment = {
+              type: "text" as const,
+              id: attachmentId,
+              name: attachment.name,
+              mimeType: attachment.mimeType.toLowerCase(),
+              sizeBytes: bytes.byteLength,
+              previewText: buildTextAttachmentPreview(attachment.text),
+            };
+          }
 
           const attachmentPath = resolveAttachmentPath({
             stateDir: serverConfig.stateDir,

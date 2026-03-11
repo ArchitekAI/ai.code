@@ -113,6 +113,7 @@ it.effect("decodes project.created repo settings defaults", () =>
     });
     assert.strictEqual(parsed.defaultWorktreeBaseBranch, null);
     assert.strictEqual(parsed.defaultPullRequestBaseBranch, null);
+    assert.strictEqual(parsed.pullRequestPromptTemplate, null);
   }),
 );
 

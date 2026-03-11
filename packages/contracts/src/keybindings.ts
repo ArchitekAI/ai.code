@@ -17,6 +17,7 @@ const STATIC_KEYBINDING_COMMANDS = [
   "chat.newLocal",
   "worktree.archive",
   "prompt.commitAndPush",
+  "prompt.createPullRequest",
   "editor.openFavorite",
 ] as const;
 

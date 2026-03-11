@@ -50,6 +50,7 @@ import { useTheme } from "../hooks/useTheme";
 import { gitBranchesQueryOptions } from "../lib/gitReactQuery";
 import { formatRelativeTime } from "../lib/relativeTime";
 import { decodeProjectScriptKeybindingRule } from "../lib/projectScriptKeybindings";
+import { sendCreatePullRequestPrompt } from "../lib/pullRequestPrompt";
 import { sendWorktreeThreadPrompt } from "../lib/sendWorktreeThreadPrompt";
 import { resolveThreadStatusVisual } from "../lib/threadStatus";
 import { isTerminalFocused } from "../lib/terminalFocus";
@@ -801,6 +802,37 @@ export default function WorktreeChatWorkspace({
       });
     }
   }, [focusedProject, focusedThread, getDraftThread, settings.commitAndPushPrompt, worktreeId]);
+  const sendCreatePullRequestMessage = useCallback(async () => {
+    if (!focusedThread || !focusedProject?.model || !gitCwd) {
+      toastManager.add({
+        type: "warning",
+        title: "No focused thread",
+        description: "Open or create a worktree thread first.",
+      });
+      return;
+    }
+
+    try {
+      await sendCreatePullRequestPrompt({
+        queryClient,
+        cwd: gitCwd,
+        worktreeId,
+        projectId: focusedProject.id,
+        projectModel: focusedProject.model,
+        targetThreadId: focusedThread.threadId,
+        isServerThread: focusedThread.isServerThread,
+        draftThread: getDraftThread(focusedThread.threadId),
+        defaultPullRequestBaseBranch: focusedProject.defaultPullRequestBaseBranch,
+        promptTemplate: focusedProject.pullRequestPromptTemplate,
+      });
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not send prompt",
+        description: error instanceof Error ? error.message : "An unknown error occurred.",
+      });
+    }
+  }, [focusedProject, focusedThread, getDraftThread, gitCwd, queryClient, worktreeId]);
 
   useEffect(() => {
     if (rightRailState.width === rightRailWidth) {
@@ -1256,6 +1288,13 @@ export default function WorktreeChatWorkspace({
         return;
       }
 
+      if (resolvedCommand === "prompt.createPullRequest") {
+        event.preventDefault();
+        event.stopPropagation();
+        void sendCreatePullRequestMessage();
+        return;
+      }
+
       const scriptId = projectScriptIdFromCommand(resolvedCommand);
       if (!scriptId || !activeProject) return;
       const script = activeProject.scripts.find((entry) => entry.id === scriptId);
@@ -1275,6 +1314,7 @@ export default function WorktreeChatWorkspace({
     keybindings,
     runProjectScript,
     sendCommitAndPushPrompt,
+    sendCreatePullRequestMessage,
     setTerminalOpen,
     splitTerminal,
     terminalState.activeTerminalId,
@@ -1414,7 +1454,10 @@ export default function WorktreeChatWorkspace({
                   cwd={gitCwd}
                   projectId={focusedProject?.id ?? null}
                   projectModel={focusedProject?.model ?? null}
-                  defaultPullRequestBaseBranch={activeProject?.defaultPullRequestBaseBranch ?? null}
+                  defaultPullRequestBaseBranch={
+                    focusedProject?.defaultPullRequestBaseBranch ?? null
+                  }
+                  pullRequestPromptTemplate={focusedProject?.pullRequestPromptTemplate ?? null}
                   focusedThreadId={focusedThread?.threadId ?? null}
                   focusedThreadIsServer={focusedThread?.isServerThread ?? false}
                   railState={rightRailState}
@@ -1446,7 +1489,8 @@ export default function WorktreeChatWorkspace({
                 cwd={gitCwd}
                 projectId={focusedProject?.id ?? null}
                 projectModel={focusedProject?.model ?? null}
-                defaultPullRequestBaseBranch={activeProject?.defaultPullRequestBaseBranch ?? null}
+                defaultPullRequestBaseBranch={focusedProject?.defaultPullRequestBaseBranch ?? null}
+                pullRequestPromptTemplate={focusedProject?.pullRequestPromptTemplate ?? null}
                 focusedThreadId={focusedThread?.threadId ?? null}
                 focusedThreadIsServer={focusedThread?.isServerThread ?? false}
                 railState={rightRailState}

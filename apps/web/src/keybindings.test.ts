@@ -112,6 +112,11 @@ const DEFAULT_BINDINGS = compile([
     command: "prompt.commitAndPush",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
+  {
+    shortcut: modShortcut("p", { shiftKey: true }),
+    command: "prompt.createPullRequest",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
   { shortcut: modShortcut("o"), command: "editor.openFavorite" },
 ]);
 
@@ -262,6 +267,10 @@ describe("shortcutLabelForCommand", () => {
       shortcutLabelForCommand(DEFAULT_BINDINGS, "prompt.commitAndPush", "MacIntel"),
       "⌘⇧Y",
     );
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "prompt.createPullRequest", "MacIntel"),
+      "⌘⇧P",
+    );
   });
 });
 
@@ -351,6 +360,23 @@ describe("chat/editor shortcuts", () => {
         context: { terminalFocus: true },
       }),
       "prompt.commitAndPush",
+    );
+  });
+
+  it("resolves prompt.createPullRequest shortcut outside terminal focus", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "p", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "prompt.createPullRequest",
+    );
+    assert.notStrictEqual(
+      resolveShortcutCommand(event({ key: "p", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: true },
+      }),
+      "prompt.createPullRequest",
     );
   });
 
@@ -475,8 +501,8 @@ describe("formatShortcutLabel", () => {
 describe("formatShortcutKbdSequence", () => {
   it("formats macOS shortcuts as discrete keys", () => {
     assert.deepEqual(formatShortcutKbdSequence(modShortcut("a", { shiftKey: true }), "MacIntel"), [
-      "Shift",
       "Command",
+      "Shift",
       "A",
     ]);
   });
@@ -494,11 +520,15 @@ describe("shortcutKbdSequenceForCommand", () => {
   it("returns discrete keys for the latest matching command", () => {
     assert.deepEqual(
       shortcutKbdSequenceForCommand(DEFAULT_BINDINGS, "worktree.archive", "MacIntel"),
-      ["Shift", "Command", "A"],
+      ["Command", "Shift", "A"],
     );
     assert.deepEqual(
       shortcutKbdSequenceForCommand(DEFAULT_BINDINGS, "prompt.commitAndPush", "MacIntel"),
-      ["Shift", "Command", "Y"],
+      ["Command", "Shift", "Y"],
+    );
+    assert.deepEqual(
+      shortcutKbdSequenceForCommand(DEFAULT_BINDINGS, "prompt.createPullRequest", "MacIntel"),
+      ["Command", "Shift", "P"],
     );
   });
 });

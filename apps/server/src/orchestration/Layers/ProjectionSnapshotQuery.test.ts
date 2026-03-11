@@ -249,6 +249,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           defaultModel: "gpt-5-codex",
           defaultWorktreeBaseBranch: "origin/main",
           defaultPullRequestBaseBranch: "main",
+          pullRequestPromptTemplate: null,
           scripts: [
             {
               id: "script-1",

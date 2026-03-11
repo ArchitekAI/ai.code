@@ -12,6 +12,7 @@ export default Effect.gen(function* () {
       default_model TEXT,
       default_worktree_base_branch TEXT,
       default_pull_request_base_branch TEXT,
+      pull_request_prompt_template TEXT,
       scripts_json TEXT NOT NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,

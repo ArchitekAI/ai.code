@@ -45,6 +45,9 @@ describe("decider project scripts", () => {
       (event.payload as { defaultPullRequestBaseBranch: string | null })
         .defaultPullRequestBaseBranch,
     ).toBeNull();
+    expect(
+      (event.payload as { pullRequestPromptTemplate: string | null }).pullRequestPromptTemplate,
+    ).toBeNull();
   });
 
   it("propagates scripts in project.meta.update payload", async () => {
@@ -69,6 +72,7 @@ describe("decider project scripts", () => {
           defaultModel: null,
           defaultWorktreeBaseBranch: null,
           defaultPullRequestBaseBranch: null,
+          pullRequestPromptTemplate: null,
           scripts: [],
           createdAt: now,
           updatedAt: now,
@@ -125,6 +129,7 @@ describe("decider project scripts", () => {
           defaultModel: null,
           defaultWorktreeBaseBranch: null,
           defaultPullRequestBaseBranch: null,
+          pullRequestPromptTemplate: null,
           scripts: [],
           createdAt: now,
           updatedAt: now,
@@ -178,6 +183,7 @@ describe("decider project scripts", () => {
           defaultModel: null,
           defaultWorktreeBaseBranch: null,
           defaultPullRequestBaseBranch: null,
+          pullRequestPromptTemplate: null,
           scripts: [],
           createdAt: now,
           updatedAt: now,
@@ -287,6 +293,7 @@ describe("decider project scripts", () => {
           defaultModel: null,
           defaultWorktreeBaseBranch: null,
           defaultPullRequestBaseBranch: null,
+          pullRequestPromptTemplate: null,
           scripts: [],
           createdAt: now,
           updatedAt: now,
@@ -368,6 +375,7 @@ describe("decider project scripts", () => {
           defaultModel: null,
           defaultWorktreeBaseBranch: null,
           defaultPullRequestBaseBranch: null,
+          pullRequestPromptTemplate: null,
           scripts: [],
           createdAt: now,
           updatedAt: now,
