@@ -514,6 +514,13 @@ async function waitForComposerEditor(): Promise<HTMLElement> {
   );
 }
 
+async function waitForComposerShell(): Promise<HTMLElement> {
+  return waitForElement(
+    () => document.querySelector<HTMLElement>('[data-chat-composer-shell="true"]'),
+    "Unable to find composer shell.",
+  );
+}
+
 async function waitForInteractionModeButton(
   expectedLabel: "Chat" | "Plan",
 ): Promise<HTMLButtonElement> {
@@ -940,6 +947,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
     try {
       const initialModeButton = await waitForInteractionModeButton("Chat");
+      expect((await waitForComposerShell()).className).not.toContain("border-dashed");
       expect(initialModeButton.title).toContain("enter plan mode");
 
       window.dispatchEvent(
@@ -970,6 +978,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect((await waitForInteractionModeButton("Plan")).title).toContain(
             "return to normal chat mode",
           );
+          const composerShell = await waitForComposerShell();
+          expect(composerShell.className).toContain("border-dashed");
+          expect(composerShell.className).toContain("border-primary");
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -986,6 +997,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await vi.waitFor(
         async () => {
           expect((await waitForInteractionModeButton("Chat")).title).toContain("enter plan mode");
+          expect((await waitForComposerShell()).className).not.toContain("border-dashed");
         },
         { timeout: 8_000, interval: 16 },
       );

@@ -3735,9 +3735,14 @@ export default function ChatView({ threadId }: ChatViewProps) {
               data-chat-composer-form="true"
             >
               <div
-                className={`group relative rounded-[20px] border bg-card transition-colors duration-200 focus-within:border-ring/45 ${
-                  isDragOverComposer ? "border-primary/70 bg-accent/30" : "border-border"
-                }`}
+                data-chat-composer-shell="true"
+                className={cn(
+                  "group relative rounded-[20px] border bg-card transition-colors duration-200",
+                  interactionMode === "plan"
+                    ? "border-dashed border-primary focus-within:border-primary"
+                    : "border-border focus-within:border-ring/45",
+                  isDragOverComposer && "bg-accent/30",
+                )}
                 onDragEnter={onComposerDragEnter}
                 onDragOver={onComposerDragOver}
                 onDragLeave={onComposerDragLeave}
