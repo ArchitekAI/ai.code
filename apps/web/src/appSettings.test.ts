@@ -6,7 +6,6 @@ import {
   normalizeCustomModelSlugs,
   resolveAppModelSelection,
   getAppSettingsSnapshot,
-  useAppSettings,
 } from "./appSettings";
 
 describe("app name settings", () => {

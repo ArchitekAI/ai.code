@@ -9,6 +9,7 @@
 import { Config, Data, Effect, FileSystem, Layer, Option, Path, Schema, ServiceMap } from "effect";
 import { Command, Flag } from "effect/unstable/cli";
 import { NetService } from "@repo/shared/Net";
+import { APP_BASE_NAME } from "@repo/shared/branding";
 import {
   DEFAULT_PORT,
   resolveStaticDir,
@@ -262,7 +263,7 @@ const makeServerProgram = (input: CliInput) =>
         ? `http://${formatHostForUrl(config.host)}:${config.port}`
         : localUrl;
     const { authToken, devUrl, ...safeConfig } = config;
-    yield* Effect.logInfo("T3 Code running", {
+    yield* Effect.logInfo(`${APP_BASE_NAME} running`, {
       ...safeConfig,
       devUrl: devUrl?.toString(),
       authEnabled: Boolean(authToken),
@@ -342,6 +343,6 @@ export const t3Cli = Command.make("t3", {
   autoBootstrapProjectFromCwd: autoBootstrapProjectFromCwdFlag,
   logWebSocketEvents: logWebSocketEventsFlag,
 }).pipe(
-  Command.withDescription("Run the T3 Code server."),
+  Command.withDescription(`Run the ${APP_BASE_NAME} server.`),
   Command.withHandler((input) => Effect.scoped(makeServerProgram(input))),
 );

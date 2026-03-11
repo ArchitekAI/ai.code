@@ -1,8 +1,9 @@
 import {
-  APP_BASE_NAME,
   getAppDisplayName as getSharedAppDisplayName,
   getAppStageLabel,
 } from "@repo/shared/branding";
+
+export { APP_BASE_NAME } from "@repo/shared/branding";
 
 export const APP_STAGE_LABEL = getAppStageLabel(import.meta.env.DEV);
 export function getAppDisplayName(customAppName?: string | null): string {

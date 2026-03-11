@@ -49,9 +49,7 @@ function RootRouteView() {
     return (
       <div className="flex h-screen flex-col bg-background text-foreground">
         <div className="flex flex-1 items-center justify-center">
-          <p className="text-sm text-muted-foreground">
-            Connecting to {appDisplayName} server...
-          </p>
+          <p className="text-sm text-muted-foreground">Connecting to {appDisplayName} server...</p>
         </div>
       </div>
     );

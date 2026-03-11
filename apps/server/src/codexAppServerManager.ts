@@ -19,6 +19,7 @@ import {
   RuntimeMode,
   ProviderInteractionMode,
 } from "@repo/contracts";
+import { APP_BASE_NAME } from "@repo/shared/branding";
 import { normalizeModelSlug } from "@repo/shared/model";
 import { Effect, ServiceMap } from "effect";
 
@@ -405,7 +406,7 @@ export function buildCodexInitializeParams() {
   return {
     clientInfo: {
       name: "t3code_desktop",
-      title: "T3 Code Desktop",
+      title: `${APP_BASE_NAME} Desktop`,
       version: "0.1.0",
     },
     capabilities: {

@@ -22,6 +22,7 @@ import { autoUpdater } from "electron-updater";
 
 import type { ContextMenuItem } from "@repo/contracts";
 import { NetService } from "@repo/shared/Net";
+import { APP_BASE_NAME, getAppDisplayName, normalizeAppBaseName } from "@repo/shared/branding";
 import { RotatingFileSink } from "@repo/shared/logging";
 import { showDesktopConfirmDialog } from "./confirmDialog";
 import { fixPath } from "./fixPath";
@@ -45,6 +46,7 @@ fixPath();
 const PICK_FOLDER_CHANNEL = "desktop:pick-folder";
 const CONFIRM_CHANNEL = "desktop:confirm";
 const SET_THEME_CHANNEL = "desktop:set-theme";
+const SET_APP_DISPLAY_NAME_CHANNEL = "desktop:set-app-display-name";
 const CONTEXT_MENU_CHANNEL = "desktop:context-menu";
 const OPEN_EXTERNAL_CHANNEL = "desktop:open-external";
 const MENU_ACTION_CHANNEL = "desktop:menu-action";
@@ -57,7 +59,7 @@ const STATE_DIR =
 const DESKTOP_SCHEME = "t3";
 const ROOT_DIR = Path.resolve(__dirname, "../../..");
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
-const APP_DISPLAY_NAME = isDevelopment ? "T3 Code (Dev)" : "T3 Code (Alpha)";
+const DEFAULT_APP_DISPLAY_NAME = getAppDisplayName(isDevelopment);
 const APP_USER_MODEL_ID = "com.t3tools.t3code";
 const USER_DATA_DIR_NAME = isDevelopment ? "t3code-dev" : "t3code";
 const LEGACY_USER_DATA_DIR_NAME = isDevelopment ? "T3 Code (Dev)" : "T3 Code (Alpha)";
@@ -87,6 +89,7 @@ let aboutCommitHashCache: string | null | undefined;
 let desktopLogSink: RotatingFileSink | null = null;
 let backendLogSink: RotatingFileSink | null = null;
 let restoreStdIoCapture: (() => void) | null = null;
+let currentAppDisplayName = DEFAULT_APP_DISPLAY_NAME;
 
 let destructiveMenuIconCache: Electron.NativeImage | null | undefined;
 const desktopRuntimeInfo = resolveDesktopRuntimeInfo({
@@ -436,7 +439,7 @@ function handleFatalStartupError(stage: string, error: unknown): void {
   console.error(`[desktop] fatal startup error (${stage})`, error);
   if (!isQuitting) {
     isQuitting = true;
-    dialog.showErrorBox("T3 Code failed to start", `Stage: ${stage}\n${message}${detail}`);
+    dialog.showErrorBox(`${APP_BASE_NAME} failed to start`, `Stage: ${stage}\n${message}${detail}`);
   }
   stopBackend();
   restoreStdIoCapture?.();
@@ -643,7 +646,7 @@ function resolveIconPath(ext: "ico" | "icns" | "png"): string | null {
  *
  * Electron derives the default userData path from `productName` in
  * package.json, which currently produces directories with spaces and
- * parentheses (e.g. `~/.config/T3 Code (Alpha)` on Linux). This is
+ * parentheses (e.g. `~/.config/AI Code (Alpha)` on Linux). This is
  * unfriendly for shell usage and violates Linux naming conventions.
  *
  * We override it to a clean lowercase name (`t3code`). If the legacy
@@ -666,11 +669,12 @@ function resolveUserDataPath(): string {
   return Path.join(appDataBase, USER_DATA_DIR_NAME);
 }
 
-function configureAppIdentity(): void {
-  app.setName(APP_DISPLAY_NAME);
+function configureAppIdentity(appDisplayName = currentAppDisplayName): void {
+  currentAppDisplayName = appDisplayName;
+  app.setName(appDisplayName);
   const commitHash = resolveAboutCommitHash();
   app.setAboutPanelOptions({
-    applicationName: APP_DISPLAY_NAME,
+    applicationName: appDisplayName,
     applicationVersion: app.getVersion(),
     version: commitHash ?? "unknown",
   });
@@ -684,6 +688,21 @@ function configureAppIdentity(): void {
     if (iconPath) {
       app.dock.setIcon(iconPath);
     }
+  }
+}
+
+function setRuntimeAppDisplayName(appDisplayName: string | null | undefined): void {
+  const nextDisplayName = getAppDisplayName(
+    isDevelopment,
+    normalizeAppBaseName(appDisplayName) ?? APP_BASE_NAME,
+  );
+  if (nextDisplayName === currentAppDisplayName) {
+    return;
+  }
+
+  configureAppIdentity(nextDisplayName);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setTitle(nextDisplayName);
   }
 }
 
@@ -1086,6 +1105,11 @@ function registerIpcHandlers(): void {
     nativeTheme.themeSource = theme;
   });
 
+  ipcMain.removeHandler(SET_APP_DISPLAY_NAME_CHANNEL);
+  ipcMain.handle(SET_APP_DISPLAY_NAME_CHANNEL, async (_event, rawAppDisplayName: unknown) => {
+    setRuntimeAppDisplayName(typeof rawAppDisplayName === "string" ? rawAppDisplayName : null);
+  });
+
   ipcMain.removeHandler(CONTEXT_MENU_CHANNEL);
   ipcMain.handle(
     CONTEXT_MENU_CHANNEL,
@@ -1209,7 +1233,7 @@ function createWindow(): BrowserWindow {
     show: false,
     autoHideMenuBar: true,
     ...getIconOption(),
-    title: APP_DISPLAY_NAME,
+    title: currentAppDisplayName,
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 16, y: 18 },
     webPreferences: {
@@ -1258,10 +1282,10 @@ function createWindow(): BrowserWindow {
 
   window.on("page-title-updated", (event) => {
     event.preventDefault();
-    window.setTitle(APP_DISPLAY_NAME);
+    window.setTitle(currentAppDisplayName);
   });
   window.webContents.on("did-finish-load", () => {
-    window.setTitle(APP_DISPLAY_NAME);
+    window.setTitle(currentAppDisplayName);
     emitUpdateState();
   });
   window.once("ready-to-show", () => {

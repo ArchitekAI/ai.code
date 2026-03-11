@@ -2,10 +2,15 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { type ProviderKind } from "@repo/contracts";
+import { APP_BASE_NAME } from "@repo/shared/branding";
 import { DEFAULT_GIT_BRANCH_PREFIX, normalizeGitBranchPrefix } from "@repo/shared/git";
 import { getModelOptions, normalizeModelSlug } from "@repo/shared/model";
 
-import { MAX_CUSTOM_MODEL_LENGTH, useAppSettings } from "../appSettings";
+import {
+  MAX_CUSTOM_APP_NAME_LENGTH,
+  MAX_CUSTOM_MODEL_LENGTH,
+  useAppSettings,
+} from "../appSettings";
 import { isElectron } from "../env";
 import { useTheme } from "../hooks/useTheme";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
@@ -14,7 +19,7 @@ import { preferredTerminalEditor } from "../terminal-links";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Switch } from "../components/ui/switch";
-import { APP_VERSION } from "../branding";
+import { APP_VERSION, getAppDisplayName } from "../branding";
 import { SidebarInset } from "~/components/ui/sidebar";
 
 const THEME_OPTIONS = [
@@ -100,6 +105,7 @@ function SettingsRouteView() {
 
   const codexBinaryPath = settings.codexBinaryPath;
   const codexHomePath = settings.codexHomePath;
+  const effectiveAppDisplayName = getAppDisplayName(settings.customAppName);
   const keybindingsConfigPath = serverConfigQuery.data?.keybindingsConfigPath ?? null;
   const normalizedGitBranchPrefixPreview = useMemo(
     () => normalizeGitBranchPrefix(gitBranchPrefixInput) ?? settings.gitBranchPrefix,
@@ -231,7 +237,7 @@ function SettingsRouteView() {
               <div className="mb-4">
                 <h2 className="text-sm font-medium text-foreground">Appearance</h2>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Choose how T3 Code handles light and dark mode.
+                  Choose how {effectiveAppDisplayName} handles light and dark mode.
                 </p>
               </div>
 
@@ -268,6 +274,46 @@ function SettingsRouteView() {
               <p className="mt-4 text-xs text-muted-foreground">
                 Active theme: <span className="font-medium text-foreground">{resolvedTheme}</span>
               </p>
+            </section>
+
+            <section className="rounded-2xl border border-border bg-card p-5">
+              <div className="mb-4">
+                <h2 className="text-sm font-medium text-foreground">Branding</h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Customize the runtime app name shown in the web app and desktop window.
+                </p>
+              </div>
+
+              <div className="space-y-3">
+                <label htmlFor="custom-app-name" className="block space-y-1">
+                  <span className="text-xs font-medium text-foreground">Custom app name</span>
+                  <Input
+                    id="custom-app-name"
+                    value={settings.customAppName}
+                    onChange={(event) => updateSettings({ customAppName: event.target.value })}
+                    placeholder={APP_BASE_NAME}
+                    maxLength={MAX_CUSTOM_APP_NAME_LENGTH}
+                    spellCheck={false}
+                  />
+                </label>
+
+                <p className="text-xs text-muted-foreground">
+                  Preview:{" "}
+                  <span className="font-medium text-foreground">{effectiveAppDisplayName}</span>
+                </p>
+
+                <div className="flex justify-end">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => updateSettings({ customAppName: defaults.customAppName })}
+                    disabled={settings.customAppName === defaults.customAppName}
+                  >
+                    Reset to default
+                  </Button>
+                </div>
+              </div>
             </section>
 
             <section className="rounded-2xl border border-border bg-card p-5">

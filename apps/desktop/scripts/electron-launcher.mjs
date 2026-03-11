@@ -1,4 +1,4 @@
-// This file mostly exists because we want dev mode to say "T3 Code (Dev)" instead of "electron"
+// This file mostly exists because we want dev mode to use the app display name instead of "electron"
 
 import { spawnSync } from "node:child_process";
 import {
@@ -15,9 +15,10 @@ import {
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { getAppDisplayName } from "@repo/shared/branding";
 
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
-const APP_DISPLAY_NAME = isDevelopment ? "T3 Code (Dev)" : "T3 Code (Alpha)";
+const APP_DISPLAY_NAME = getAppDisplayName(isDevelopment);
 const APP_BUNDLE_ID = "com.t3tools.t3code";
 const LAUNCHER_VERSION = 1;
 
