@@ -7,18 +7,22 @@ import { DEFAULT_GIT_BRANCH_PREFIX, normalizeGitBranchPrefix } from "@repo/share
 import { getModelOptions, normalizeModelSlug } from "@repo/shared/model";
 
 import {
+  MAX_PROMPT_HOTKEY_MESSAGE_LENGTH,
   MAX_CUSTOM_APP_NAME_LENGTH,
   MAX_CUSTOM_MODEL_LENGTH,
+  normalizePromptHotkeyMessage,
   useAppSettings,
 } from "../appSettings";
 import { isElectron } from "../env";
 import { useTheme } from "../hooks/useTheme";
+import { shortcutLabelForCommand } from "../keybindings";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { ensureNativeApi } from "../nativeApi";
 import { preferredTerminalEditor } from "../terminal-links";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Switch } from "../components/ui/switch";
+import { Textarea } from "../components/ui/textarea";
 import { APP_VERSION, getAppDisplayName } from "../branding";
 import { SidebarInset } from "~/components/ui/sidebar";
 
@@ -102,6 +106,9 @@ function SettingsRouteView() {
   >({});
   const [customAppNameInput, setCustomAppNameInput] = useState(settings.customAppName);
   const [gitBranchPrefixInput, setGitBranchPrefixInput] = useState(settings.gitBranchPrefix);
+  const [commitAndPushPromptInput, setCommitAndPushPromptInput] = useState(
+    settings.commitAndPushPrompt,
+  );
   const [gitBranchPrefixError, setGitBranchPrefixError] = useState<string | null>(null);
 
   const codexBinaryPath = settings.codexBinaryPath;
@@ -112,6 +119,14 @@ function SettingsRouteView() {
     () => normalizeGitBranchPrefix(gitBranchPrefixInput) ?? settings.gitBranchPrefix,
     [gitBranchPrefixInput, settings.gitBranchPrefix],
   );
+  const commitAndPushShortcutLabel = useMemo(
+    () =>
+      shortcutLabelForCommand(serverConfigQuery.data?.keybindings ?? [], "prompt.commitAndPush") ??
+      (typeof navigator !== "undefined" && navigator.platform.includes("Mac")
+        ? "⌘⇧Y"
+        : "Ctrl+Shift+Y"),
+    [serverConfigQuery.data?.keybindings],
+  );
 
   useEffect(() => {
     setCustomAppNameInput(settings.customAppName);
@@ -121,6 +136,10 @@ function SettingsRouteView() {
     setGitBranchPrefixInput(settings.gitBranchPrefix);
   }, [settings.gitBranchPrefix]);
 
+  useEffect(() => {
+    setCommitAndPushPromptInput(settings.commitAndPushPrompt);
+  }, [settings.commitAndPushPrompt]);
+
   const commitCustomAppName = useCallback(() => {
     const normalized = normalizeAppBaseName(customAppNameInput) ?? "";
     setCustomAppNameInput(normalized);
@@ -128,6 +147,14 @@ function SettingsRouteView() {
       updateSettings({ customAppName: normalized });
     }
   }, [customAppNameInput, settings.customAppName, updateSettings]);
+
+  const commitCommitAndPushPrompt = useCallback(() => {
+    const normalized = normalizePromptHotkeyMessage(commitAndPushPromptInput);
+    setCommitAndPushPromptInput(normalized);
+    if (normalized !== settings.commitAndPushPrompt) {
+      updateSettings({ commitAndPushPrompt: normalized });
+    }
+  }, [commitAndPushPromptInput, settings.commitAndPushPrompt, updateSettings]);
 
   const openKeybindingsFile = useCallback(() => {
     if (!keybindingsConfigPath) return;
@@ -681,6 +708,61 @@ function SettingsRouteView() {
                   <p className="text-xs text-destructive">{openKeybindingsError}</p>
                 ) : null}
               </div>
+            </section>
+
+            <section className="rounded-2xl border border-border bg-card p-5">
+              <div className="mb-4">
+                <h2 className="text-sm font-medium text-foreground">Prompt hotkeys</h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Customize the prompt text sent by shortcut-driven worktree actions.
+                </p>
+              </div>
+
+              <div className="rounded-lg border border-border bg-background p-3">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-foreground">Commit and push changes</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Sends this prompt to the focused worktree thread.
+                    </p>
+                  </div>
+                  <code className="rounded-md border border-border bg-card px-2 py-1 text-[11px] font-medium text-muted-foreground">
+                    {commitAndPushShortcutLabel}
+                  </code>
+                </div>
+
+                <div className="mt-3 space-y-2">
+                  <Textarea
+                    rows={3}
+                    maxLength={MAX_PROMPT_HOTKEY_MESSAGE_LENGTH}
+                    value={commitAndPushPromptInput}
+                    onChange={(event) => setCommitAndPushPromptInput(event.target.value)}
+                    onBlur={commitCommitAndPushPrompt}
+                    placeholder={defaults.commitAndPushPrompt}
+                    aria-label="Commit and push changes prompt"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {commitAndPushPromptInput.length}/{MAX_PROMPT_HOTKEY_MESSAGE_LENGTH}. Leave it
+                    blank to restore the default prompt.
+                  </p>
+                </div>
+              </div>
+
+              {settings.commitAndPushPrompt !== defaults.commitAndPushPrompt ? (
+                <div className="mt-3 flex justify-end">
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() =>
+                      updateSettings({
+                        commitAndPushPrompt: defaults.commitAndPushPrompt,
+                      })
+                    }
+                  >
+                    Restore default
+                  </Button>
+                </div>
+              ) : null}
             </section>
 
             <section className="rounded-2xl border border-border bg-card p-5">

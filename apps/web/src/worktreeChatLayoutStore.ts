@@ -44,7 +44,7 @@ export function createDefaultWorktreeRightRailState(): WorktreeRightRailState {
   return {
     open: true,
     width: DEFAULT_RIGHT_RAIL_WIDTH,
-    activeTab: "all-files",
+    activeTab: "checks",
     allFilesViewMode: "tree",
     changesViewMode: "tree",
     allFilesExpandedPaths: null,

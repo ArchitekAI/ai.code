@@ -52,6 +52,12 @@ it.effect("parses keybinding rules", () =>
       command: "worktree.archive",
     });
     assert.strictEqual(parsedArchive.command, "worktree.archive");
+
+    const parsedPromptHotkey = yield* decode(KeybindingRule, {
+      key: "mod+shift+y",
+      command: "prompt.commitAndPush",
+    });
+    assert.strictEqual(parsedPromptHotkey.command, "prompt.commitAndPush");
   }),
 );
 

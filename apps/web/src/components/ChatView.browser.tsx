@@ -1290,6 +1290,58 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("sends the configured prompt-hotkey message to the focused worktree thread", async () => {
+    localStorage.setItem(
+      "t3code:app-settings:v1",
+      JSON.stringify({
+        commitAndPushPrompt: "Commit, push, and summarize the changes",
+      }),
+    );
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-target-prompt-hotkey" as MessageId,
+        targetText: "prompt hotkey target",
+      }),
+    });
+
+    try {
+      const isMac = navigator.platform.includes("Mac");
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "y",
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+          ...(isMac ? { metaKey: true } : { ctrlKey: true }),
+        }),
+      );
+
+      await vi.waitFor(
+        () => {
+          const request = wsRequests.find(
+            (entry) =>
+              entry._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              entry.type === "thread.turn.start",
+          );
+          expect(request).toMatchObject({
+            _tag: ORCHESTRATION_WS_METHODS.dispatchCommand,
+            type: "thread.turn.start",
+            threadId: THREAD_ID,
+            message: {
+              role: "user",
+              text: "Commit, push, and summarize the changes",
+            },
+          });
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("focuses the composer in the currently focused split pane", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,

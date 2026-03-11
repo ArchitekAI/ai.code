@@ -161,7 +161,7 @@ export function formatShortcutLabel(
   const showShift = shortcut.shiftKey;
 
   if (useMetaForMod) {
-    return `${showCtrl ? "\u2303" : ""}${showAlt ? "\u2325" : ""}${showShift ? "\u21e7" : ""}${showMeta ? "\u2318" : ""}${keyLabel}`;
+    return `${showCtrl ? "\u2303" : ""}${showAlt ? "\u2325" : ""}${showMeta ? "\u2318" : ""}${showShift ? "\u21e7" : ""}${keyLabel}`;
   }
 
   return formatShortcutKbdSequence(shortcut, platform).join("+");
@@ -255,6 +255,22 @@ export function isOpenFavoriteEditorShortcut(
   options?: ShortcutMatchOptions,
 ): boolean {
   return matchesCommandShortcut(event, keybindings, "editor.openFavorite", options);
+}
+
+export function isDefaultCommitAndPushPromptShortcut(
+  event: ShortcutEventLike,
+  platform = navigator.platform,
+): boolean {
+  const key = normalizeEventKey(event.key);
+  if (key !== "y" || event.altKey || !event.shiftKey) {
+    return false;
+  }
+
+  if (isMacPlatform(platform)) {
+    return event.metaKey && !event.ctrlKey;
+  }
+
+  return event.ctrlKey && !event.metaKey;
 }
 
 export function isTerminalClearShortcut(

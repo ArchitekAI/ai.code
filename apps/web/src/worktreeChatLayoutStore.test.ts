@@ -165,7 +165,7 @@ describe("worktreeChatLayoutStore", () => {
     expect(rightRailState).toEqual({
       open: true,
       width: 336,
-      activeTab: "all-files",
+      activeTab: "checks",
       allFilesViewMode: "tree",
       changesViewMode: "tree",
       allFilesExpandedPaths: null,

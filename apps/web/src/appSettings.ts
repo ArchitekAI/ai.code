@@ -9,6 +9,8 @@ const APP_SETTINGS_STORAGE_KEY = "t3code:app-settings:v1";
 const MAX_CUSTOM_MODEL_COUNT = 32;
 export const MAX_CUSTOM_MODEL_LENGTH = 256;
 export const MAX_CUSTOM_APP_NAME_LENGTH = MAX_APP_BASE_NAME_LENGTH;
+export const MAX_PROMPT_HOTKEY_MESSAGE_LENGTH = 2_000;
+export const DEFAULT_COMMIT_AND_PUSH_PROMPT = "Commit and push changes";
 const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>> = {
   codex: new Set(getModelOptions("codex").map((option) => option.slug)),
 };
@@ -33,6 +35,9 @@ const AppSettingsSchema = Schema.Struct({
   gitBranchPrefix: Schema.String.check(Schema.isMaxLength(256)).pipe(
     Schema.withConstructorDefault(() => Option.some(DEFAULT_GIT_BRANCH_PREFIX)),
   ),
+  commitAndPushPrompt: Schema.String.check(
+    Schema.isMaxLength(MAX_PROMPT_HOTKEY_MESSAGE_LENGTH),
+  ).pipe(Schema.withConstructorDefault(() => Option.some(DEFAULT_COMMIT_AND_PUSH_PROMPT))),
 });
 export type AppSettings = typeof AppSettingsSchema.Type;
 export interface AppModelOption {
@@ -76,6 +81,14 @@ export function normalizeCustomModelSlugs(
   return normalizedModels;
 }
 
+export function normalizePromptHotkeyMessage(
+  value: string | null | undefined,
+  fallback = DEFAULT_COMMIT_AND_PUSH_PROMPT,
+): string {
+  const normalized = value?.trim() ?? "";
+  return normalized.length > 0 ? normalized : fallback;
+}
+
 function normalizeAppSettings(settings: AppSettings): AppSettings {
   return {
     ...settings,
@@ -83,6 +96,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     customAppName: normalizeAppBaseName(settings.customAppName) ?? "",
     gitBranchPrefix:
       normalizeGitBranchPrefix(settings.gitBranchPrefix) ?? DEFAULT_GIT_BRANCH_PREFIX,
+    commitAndPushPrompt: normalizePromptHotkeyMessage(settings.commitAndPushPrompt),
   };
 }
 

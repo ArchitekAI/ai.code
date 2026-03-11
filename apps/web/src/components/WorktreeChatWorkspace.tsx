@@ -41,6 +41,8 @@ import { KbdTooltip } from "./ui/kbd-tooltip";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Sheet, SheetContent, SheetTitle } from "./ui/sheet";
 import { SidebarTrigger } from "./ui/sidebar";
+import { toastManager } from "./ui/toast";
+import { useAppSettings } from "../appSettings";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { isElectron } from "../env";
 import { useMediaQuery } from "../hooks/useMediaQuery";
@@ -48,6 +50,7 @@ import { useTheme } from "../hooks/useTheme";
 import { gitBranchesQueryOptions } from "../lib/gitReactQuery";
 import { formatRelativeTime } from "../lib/relativeTime";
 import { decodeProjectScriptKeybindingRule } from "../lib/projectScriptKeybindings";
+import { sendWorktreeThreadPrompt } from "../lib/sendWorktreeThreadPrompt";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { ensureWorktreeDraftThread } from "../lib/worktreeDraftThread";
 import { worktreeDisplaySubtitle, worktreeDisplayTitle } from "../lib/worktrees";
@@ -69,7 +72,11 @@ import {
   type ProjectScript,
 } from "../types";
 import type { Worktree } from "../types";
-import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
+import {
+  isDefaultCommitAndPushPromptShortcut,
+  resolveShortcutCommand,
+  shortcutLabelForCommand,
+} from "../keybindings";
 import {
   createDefaultWorktreeRightRailState,
   type WorktreeDockPanelParams,
@@ -353,6 +360,7 @@ export default function WorktreeChatWorkspace({
   threadId,
   worktreeId,
 }: WorktreeChatWorkspaceProps) {
+  const { settings } = useAppSettings();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { resolvedTheme } = useTheme();
@@ -747,6 +755,34 @@ export default function WorktreeChatWorkspace({
       worktreeTerminalOwnerId,
     ],
   );
+  const sendCommitAndPushPrompt = useCallback(async () => {
+    if (!focusedThread || !focusedProject?.model) {
+      toastManager.add({
+        type: "warning",
+        title: "No focused thread",
+        description: "Open or create a worktree thread first.",
+      });
+      return;
+    }
+
+    try {
+      await sendWorktreeThreadPrompt({
+        targetThreadId: focusedThread.threadId,
+        worktreeId,
+        projectId: focusedProject.id,
+        projectModel: focusedProject.model,
+        prompt: settings.commitAndPushPrompt,
+        isServerThread: focusedThread.isServerThread,
+        draftThread: getDraftThread(focusedThread.threadId),
+      });
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not send prompt",
+        description: error instanceof Error ? error.message : "An unknown error occurred.",
+      });
+    }
+  }, [focusedProject, focusedThread, getDraftThread, settings.commitAndPushPrompt, worktreeId]);
 
   useEffect(() => {
     if (rightRailState.width === rightRailWidth) {
@@ -1145,22 +1181,29 @@ export default function WorktreeChatWorkspace({
   useEffect(() => {
     const handler = (event: globalThis.KeyboardEvent) => {
       if (event.defaultPrevented) return;
+      const shortcutContext = {
+        terminalFocus: isTerminalFocused(),
+        terminalOpen: Boolean(terminalState.terminalOpen),
+      };
       const command = resolveShortcutCommand(event, keybindings, {
-        context: {
-          terminalFocus: isTerminalFocused(),
-          terminalOpen: Boolean(terminalState.terminalOpen),
-        },
+        context: shortcutContext,
       });
-      if (!command) return;
+      const useDefaultPromptHotkeyFallback =
+        command === null &&
+        !shortcutContext.terminalFocus &&
+        isDefaultCommitAndPushPromptShortcut(event);
+      const resolvedCommand =
+        command ?? (useDefaultPromptHotkeyFallback ? "prompt.commitAndPush" : null);
+      if (!resolvedCommand) return;
 
-      if (command === "terminal.toggle") {
+      if (resolvedCommand === "terminal.toggle") {
         event.preventDefault();
         event.stopPropagation();
         setTerminalOpen(!terminalState.terminalOpen);
         return;
       }
 
-      if (command === "terminal.split") {
+      if (resolvedCommand === "terminal.split") {
         event.preventDefault();
         event.stopPropagation();
         if (!terminalState.terminalOpen) {
@@ -1170,7 +1213,7 @@ export default function WorktreeChatWorkspace({
         return;
       }
 
-      if (command === "terminal.new") {
+      if (resolvedCommand === "terminal.new") {
         event.preventDefault();
         event.stopPropagation();
         if (!terminalState.terminalOpen) {
@@ -1180,7 +1223,7 @@ export default function WorktreeChatWorkspace({
         return;
       }
 
-      if (command === "terminal.close") {
+      if (resolvedCommand === "terminal.close") {
         event.preventDefault();
         event.stopPropagation();
         if (!terminalState.terminalOpen) return;
@@ -1188,7 +1231,14 @@ export default function WorktreeChatWorkspace({
         return;
       }
 
-      const scriptId = projectScriptIdFromCommand(command);
+      if (resolvedCommand === "prompt.commitAndPush") {
+        event.preventDefault();
+        event.stopPropagation();
+        void sendCommitAndPushPrompt();
+        return;
+      }
+
+      const scriptId = projectScriptIdFromCommand(resolvedCommand);
       if (!scriptId || !activeProject) return;
       const script = activeProject.scripts.find((entry) => entry.id === scriptId);
       if (!script) return;
@@ -1206,6 +1256,7 @@ export default function WorktreeChatWorkspace({
     createNewTerminal,
     keybindings,
     runProjectScript,
+    sendCommitAndPushPrompt,
     setTerminalOpen,
     splitTerminal,
     terminalState.activeTerminalId,

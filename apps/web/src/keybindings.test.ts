@@ -11,6 +11,7 @@ import {
   formatShortcutKbdSequence,
   isChatNewShortcut,
   isChatNewLocalShortcut,
+  isDefaultCommitAndPushPromptShortcut,
   isDiffToggleShortcut,
   isOpenFavoriteEditorShortcut,
   isTerminalClearShortcut,
@@ -104,6 +105,11 @@ const DEFAULT_BINDINGS = compile([
   {
     shortcut: modShortcut("a", { shiftKey: true }),
     command: "worktree.archive",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
+  {
+    shortcut: modShortcut("y", { shiftKey: true }),
+    command: "prompt.commitAndPush",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
   { shortcut: modShortcut("o"), command: "editor.openFavorite" },
@@ -242,15 +248,19 @@ describe("shortcutLabelForCommand", () => {
   });
 
   it("returns labels for non-terminal commands", () => {
-    assert.strictEqual(shortcutLabelForCommand(DEFAULT_BINDINGS, "chat.new", "MacIntel"), "⇧⌘O");
+    assert.strictEqual(shortcutLabelForCommand(DEFAULT_BINDINGS, "chat.new", "MacIntel"), "⌘⇧O");
     assert.strictEqual(shortcutLabelForCommand(DEFAULT_BINDINGS, "diff.toggle", "Linux"), "Ctrl+D");
     assert.strictEqual(
       shortcutLabelForCommand(DEFAULT_BINDINGS, "worktree.archive", "MacIntel"),
-      "⇧⌘A",
+      "⌘⇧A",
     );
     assert.strictEqual(
       shortcutLabelForCommand(DEFAULT_BINDINGS, "editor.openFavorite", "Linux"),
       "Ctrl+O",
+    );
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "prompt.commitAndPush", "MacIntel"),
+      "⌘⇧Y",
     );
   });
 });
@@ -324,6 +334,44 @@ describe("chat/editor shortcuts", () => {
         context: { terminalFocus: true },
       }),
       "worktree.archive",
+    );
+  });
+
+  it("resolves prompt.commitAndPush shortcut outside terminal focus", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "y", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "prompt.commitAndPush",
+    );
+    assert.notStrictEqual(
+      resolveShortcutCommand(event({ key: "y", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: true },
+      }),
+      "prompt.commitAndPush",
+    );
+  });
+
+  it("matches the default prompt.commitAndPush fallback shortcut", () => {
+    assert.isTrue(
+      isDefaultCommitAndPushPromptShortcut(
+        event({ key: "y", metaKey: true, shiftKey: true }),
+        "MacIntel",
+      ),
+    );
+    assert.isTrue(
+      isDefaultCommitAndPushPromptShortcut(
+        event({ key: "y", ctrlKey: true, shiftKey: true }),
+        "Linux",
+      ),
+    );
+    assert.isFalse(
+      isDefaultCommitAndPushPromptShortcut(
+        event({ key: "y", metaKey: true, shiftKey: true, altKey: true }),
+        "MacIntel",
+      ),
     );
   });
 });
@@ -407,7 +455,7 @@ describe("formatShortcutLabel", () => {
   it("formats labels for macOS", () => {
     assert.strictEqual(
       formatShortcutLabel(modShortcut("d", { shiftKey: true }), "MacIntel"),
-      "⇧⌘D",
+      "⌘⇧D",
     );
   });
 
@@ -447,6 +495,10 @@ describe("shortcutKbdSequenceForCommand", () => {
     assert.deepEqual(
       shortcutKbdSequenceForCommand(DEFAULT_BINDINGS, "worktree.archive", "MacIntel"),
       ["Shift", "Command", "A"],
+    );
+    assert.deepEqual(
+      shortcutKbdSequenceForCommand(DEFAULT_BINDINGS, "prompt.commitAndPush", "MacIntel"),
+      ["Shift", "Command", "Y"],
     );
   });
 });

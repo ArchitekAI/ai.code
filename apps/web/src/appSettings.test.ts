@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_COMMIT_AND_PUSH_PROMPT,
   getAppModelOptions,
   getSlashModelOptions,
   normalizeCustomModelSlugs,
+  normalizePromptHotkeyMessage,
   resolveAppModelSelection,
   getAppSettingsSnapshot,
 } from "./appSettings";
@@ -11,6 +13,10 @@ import {
 describe("app name settings", () => {
   it("defaults the custom app name to empty", () => {
     expect(getAppSettingsSnapshot().customAppName).toBe("");
+  });
+
+  it("defaults the commit-and-push hotkey prompt", () => {
+    expect(getAppSettingsSnapshot().commitAndPushPrompt).toBe(DEFAULT_COMMIT_AND_PUSH_PROMPT);
   });
 });
 
@@ -77,5 +83,15 @@ describe("getSlashModelOptions", () => {
     const options = getSlashModelOptions("codex", ["openai/gpt-oss-120b"], "oss", "gpt-5.3-codex");
 
     expect(options.map((option) => option.slug)).toEqual(["openai/gpt-oss-120b"]);
+  });
+});
+
+describe("normalizePromptHotkeyMessage", () => {
+  it("falls back to the default prompt when the value is blank", () => {
+    expect(normalizePromptHotkeyMessage("   ")).toBe(DEFAULT_COMMIT_AND_PUSH_PROMPT);
+  });
+
+  it("preserves custom prompt text after trimming outer whitespace", () => {
+    expect(normalizePromptHotkeyMessage("  Ship it and push  ")).toBe("Ship it and push");
   });
 });
