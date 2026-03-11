@@ -151,6 +151,7 @@ export const OrchestrationWorktree = Schema.Struct({
   branchRenamePending: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
+  archivedAt: Schema.NullOr(IsoDateTime),
   deletedAt: Schema.NullOr(IsoDateTime),
 });
 export type OrchestrationWorktree = typeof OrchestrationWorktree.Type;
@@ -350,6 +351,18 @@ const WorktreeDeleteCommand = Schema.Struct({
   worktreeId: WorktreeId,
 });
 
+const WorktreeArchiveCommand = Schema.Struct({
+  type: Schema.Literal("worktree.archive"),
+  commandId: CommandId,
+  worktreeId: WorktreeId,
+});
+
+const WorktreeUnarchiveCommand = Schema.Struct({
+  type: Schema.Literal("worktree.unarchive"),
+  commandId: CommandId,
+  worktreeId: WorktreeId,
+});
+
 const ThreadCreateCommand = Schema.Struct({
   type: Schema.Literal("thread.create"),
   commandId: CommandId,
@@ -488,6 +501,8 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   WorktreeCreateCommand,
   WorktreeMetaUpdateCommand,
   WorktreeDeleteCommand,
+  WorktreeArchiveCommand,
+  WorktreeUnarchiveCommand,
   ThreadCreateCommand,
   ThreadDeleteCommand,
   ThreadMetaUpdateCommand,
@@ -510,6 +525,8 @@ export const ClientOrchestrationCommand = Schema.Union([
   WorktreeCreateCommand,
   WorktreeMetaUpdateCommand,
   WorktreeDeleteCommand,
+  WorktreeArchiveCommand,
+  WorktreeUnarchiveCommand,
   ThreadCreateCommand,
   ThreadDeleteCommand,
   ThreadMetaUpdateCommand,
@@ -612,6 +629,8 @@ export const OrchestrationEventType = Schema.Literals([
   "project.deleted",
   "worktree.created",
   "worktree.meta-updated",
+  "worktree.archived",
+  "worktree.unarchived",
   "worktree.deleted",
   "thread.created",
   "thread.deleted",
@@ -677,6 +696,16 @@ export const WorktreeMetaUpdatedPayload = Schema.Struct({
   workspacePath: Schema.optional(TrimmedNonEmptyString),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   branchRenamePending: Schema.optional(Schema.Boolean),
+  updatedAt: IsoDateTime,
+});
+
+export const WorktreeArchivedPayload = Schema.Struct({
+  worktreeId: WorktreeId,
+  archivedAt: IsoDateTime,
+});
+
+export const WorktreeUnarchivedPayload = Schema.Struct({
+  worktreeId: WorktreeId,
   updatedAt: IsoDateTime,
 });
 
@@ -865,6 +894,16 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("worktree.meta-updated"),
     payload: WorktreeMetaUpdatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("worktree.archived"),
+    payload: WorktreeArchivedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("worktree.unarchived"),
+    payload: WorktreeUnarchivedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

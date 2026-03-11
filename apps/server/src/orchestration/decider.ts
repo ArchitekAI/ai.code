@@ -9,6 +9,7 @@ import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import {
   listThreadsByProjectId,
   listWorktreesByProjectId,
+  requireActiveWorktree,
   requireProject,
   requireProjectAbsent,
   requireThread,
@@ -165,8 +166,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         projectId: command.projectId,
       });
+      const projectWorktrees = listWorktreesByProjectId(readModel, command.projectId);
       const remainingThreads = listThreadsByProjectId(readModel, command.projectId).filter(
-        (thread) => thread.deletedAt === null,
+        (thread) =>
+          thread.deletedAt === null &&
+          projectWorktrees.find((worktree) => worktree.id === thread.worktreeId)?.archivedAt ===
+            null,
       );
       if (remainingThreads.length > 0) {
         return yield* new OrchestrationCommandInvariantError({
@@ -174,8 +179,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Project '${command.projectId}' still has threads and cannot be deleted.`,
         });
       }
-      const remainingWorktrees = listWorktreesByProjectId(readModel, command.projectId).filter(
-        (worktree) => worktree.deletedAt === null && !worktree.isRoot,
+      const remainingWorktrees = projectWorktrees.filter(
+        (worktree) =>
+          worktree.deletedAt === null && worktree.archivedAt === null && !worktree.isRoot,
       );
       if (remainingWorktrees.length > 0) {
         return yield* new OrchestrationCommandInvariantError({
@@ -184,7 +190,51 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       const occurredAt = nowIso();
+      const archivedThreads = listThreadsByProjectId(readModel, command.projectId).filter(
+        (thread) =>
+          thread.deletedAt === null &&
+          projectWorktrees.find((worktree) => worktree.id === thread.worktreeId)?.archivedAt !==
+            null,
+      );
+      const archivedWorktrees = projectWorktrees.filter(
+        (worktree) =>
+          worktree.deletedAt === null && worktree.archivedAt !== null && !worktree.isRoot,
+      );
       return [
+        ...archivedThreads.map((thread) =>
+          Object.assign(
+            withEventBase({
+              aggregateKind: "thread" as const,
+              aggregateId: thread.id,
+              occurredAt,
+              commandId: command.commandId,
+            }),
+            {
+              type: "thread.deleted" as const,
+              payload: {
+                threadId: thread.id,
+                deletedAt: occurredAt,
+              },
+            },
+          ),
+        ),
+        ...archivedWorktrees.map((worktree) =>
+          Object.assign(
+            withEventBase({
+              aggregateKind: "worktree" as const,
+              aggregateId: worktree.id,
+              occurredAt,
+              commandId: command.commandId,
+            }),
+            {
+              type: "worktree.deleted" as const,
+              payload: {
+                worktreeId: worktree.id,
+                deletedAt: occurredAt,
+              },
+            },
+          ),
+        ),
         {
           ...withEventBase({
             aggregateKind: "worktree",
@@ -273,6 +323,68 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "worktree.archive": {
+      const worktree = yield* requireWorktree({
+        readModel,
+        command,
+        worktreeId: command.worktreeId,
+      });
+      if (worktree.isRoot) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Root worktree '${command.worktreeId}' cannot be archived.`,
+        });
+      }
+      if (worktree.archivedAt !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Worktree '${command.worktreeId}' is already archived.`,
+        });
+      }
+      const occurredAt = nowIso();
+      return {
+        ...withEventBase({
+          aggregateKind: "worktree",
+          aggregateId: command.worktreeId,
+          occurredAt,
+          commandId: command.commandId,
+        }),
+        type: "worktree.archived",
+        payload: {
+          worktreeId: command.worktreeId,
+          archivedAt: occurredAt,
+        },
+      };
+    }
+
+    case "worktree.unarchive": {
+      const worktree = yield* requireWorktree({
+        readModel,
+        command,
+        worktreeId: command.worktreeId,
+      });
+      if (worktree.archivedAt === null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Worktree '${command.worktreeId}' is not archived.`,
+        });
+      }
+      const occurredAt = nowIso();
+      return {
+        ...withEventBase({
+          aggregateKind: "worktree",
+          aggregateId: command.worktreeId,
+          occurredAt,
+          commandId: command.commandId,
+        }),
+        type: "worktree.unarchived",
+        payload: {
+          worktreeId: command.worktreeId,
+          updatedAt: occurredAt,
+        },
+      };
+    }
+
     case "worktree.delete": {
       const worktree = yield* requireWorktree({
         readModel,
@@ -325,7 +437,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: "Thread creation requires a worktree.",
         });
       }
-      yield* requireWorktree({
+      yield* requireActiveWorktree({
         readModel,
         command,
         worktreeId,
@@ -388,7 +500,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       if (command.worktreeId !== undefined) {
-        yield* requireWorktree({
+        yield* requireActiveWorktree({
           readModel,
           command,
           worktreeId: command.worktreeId,
@@ -460,10 +572,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.turn.start": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
+      });
+      yield* requireActiveWorktree({
+        readModel,
+        command,
+        worktreeId: thread.worktreeId,
       });
       const userMessageEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({

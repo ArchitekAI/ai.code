@@ -18,22 +18,27 @@ function ChatThreadRouteView() {
   const routeThread = useStore(
     (store) => store.threads.find((thread) => thread.id === threadId) ?? null,
   );
+  const activeWorktrees = useStore((store) => store.worktrees);
   const draftThread = useComposerDraftStore(
     (store) => store.draftThreadsByThreadId[threadId] ?? null,
   );
   const allThreads = useStore((store) => store.threads);
   const allDraftThreads = useComposerDraftStore((store) => store.draftThreadsByThreadId);
-  const routeThreadExists = routeThread !== null || draftThread !== null;
+  const resolvedWorktreeId = routeThread?.worktreeId ?? draftThread?.worktreeId ?? null;
+  const hasActiveResolvedWorktree =
+    resolvedWorktreeId === null ||
+    activeWorktrees.some((worktree) => worktree.id === resolvedWorktreeId);
+  const routeThreadExists =
+    (routeThread !== null || draftThread !== null) && hasActiveResolvedWorktree;
   const lastResolvedWorktreeIdRef = useRef(
     routeThread?.worktreeId ?? draftThread?.worktreeId ?? null,
   );
 
   useEffect(() => {
-    const resolvedWorktreeId = routeThread?.worktreeId ?? draftThread?.worktreeId ?? null;
-    if (resolvedWorktreeId) {
+    if (resolvedWorktreeId && hasActiveResolvedWorktree) {
       lastResolvedWorktreeIdRef.current = resolvedWorktreeId;
     }
-  }, [draftThread?.worktreeId, routeThread?.worktreeId]);
+  }, [hasActiveResolvedWorktree, resolvedWorktreeId]);
 
   useEffect(() => {
     if (!threadsHydrated) {
@@ -41,6 +46,11 @@ function ChatThreadRouteView() {
     }
 
     if (!routeThreadExists) {
+      if (resolvedWorktreeId !== null && !hasActiveResolvedWorktree) {
+        void navigate({ to: "/", replace: true });
+        return;
+      }
+
       const lastResolvedWorktreeId = lastResolvedWorktreeIdRef.current;
       const fallbackThread = lastResolvedWorktreeId
         ? [
@@ -72,13 +82,19 @@ function ChatThreadRouteView() {
       void navigate({ to: "/", replace: true });
       return;
     }
-  }, [allDraftThreads, allThreads, navigate, routeThreadExists, threadsHydrated]);
+  }, [
+    allDraftThreads,
+    allThreads,
+    hasActiveResolvedWorktree,
+    navigate,
+    resolvedWorktreeId,
+    routeThreadExists,
+    threadsHydrated,
+  ]);
 
   if (!threadsHydrated || !routeThreadExists) {
     return null;
   }
-
-  const resolvedWorktreeId = routeThread?.worktreeId ?? draftThread?.worktreeId ?? null;
 
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">

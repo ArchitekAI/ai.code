@@ -129,6 +129,26 @@ function formatShortcutKeyLabel(key: string): string {
   return key.slice(0, 1).toUpperCase() + key.slice(1);
 }
 
+export function formatShortcutKbdSequence(
+  shortcut: KeybindingShortcut,
+  platform = navigator.platform,
+): string[] {
+  const keyLabel = formatShortcutKeyLabel(shortcut.key);
+  const useMetaForMod = isMacPlatform(platform);
+  const showMeta = shortcut.metaKey || (shortcut.modKey && useMetaForMod);
+  const showCtrl = shortcut.ctrlKey || (shortcut.modKey && !useMetaForMod);
+  const showAlt = shortcut.altKey;
+  const showShift = shortcut.shiftKey;
+
+  const parts: string[] = [];
+  if (showMeta) parts.push(useMetaForMod ? "Command" : "Meta");
+  if (showCtrl) parts.push(useMetaForMod ? "Control" : "Ctrl");
+  if (showAlt) parts.push(useMetaForMod ? "Option" : "Alt");
+  if (showShift) parts.push("Shift");
+  parts.push(keyLabel);
+  return parts;
+}
+
 export function formatShortcutLabel(
   shortcut: KeybindingShortcut,
   platform = navigator.platform,
@@ -144,13 +164,7 @@ export function formatShortcutLabel(
     return `${showCtrl ? "\u2303" : ""}${showAlt ? "\u2325" : ""}${showShift ? "\u21e7" : ""}${showMeta ? "\u2318" : ""}${keyLabel}`;
   }
 
-  const parts: string[] = [];
-  if (showCtrl) parts.push("Ctrl");
-  if (showAlt) parts.push("Alt");
-  if (showShift) parts.push("Shift");
-  if (showMeta) parts.push("Meta");
-  parts.push(keyLabel);
-  return parts.join("+");
+  return formatShortcutKbdSequence(shortcut, platform).join("+");
 }
 
 export function shortcutLabelForCommand(
@@ -162,6 +176,19 @@ export function shortcutLabelForCommand(
     const binding = keybindings[index];
     if (!binding || binding.command !== command) continue;
     return formatShortcutLabel(binding.shortcut, platform);
+  }
+  return null;
+}
+
+export function shortcutKbdSequenceForCommand(
+  keybindings: ResolvedKeybindingsConfig,
+  command: KeybindingCommand,
+  platform = navigator.platform,
+): string[] | null {
+  for (let index = keybindings.length - 1; index >= 0; index -= 1) {
+    const binding = keybindings[index];
+    if (!binding || binding.command !== command) continue;
+    return formatShortcutKbdSequence(binding.shortcut, platform);
   }
   return null;
 }

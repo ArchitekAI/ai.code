@@ -1,12 +1,14 @@
 import {
+  ArchiveIcon,
   ArrowLeftIcon,
+  HistoryIcon,
   ChevronRightIcon,
   FolderIcon,
+  FolderPlusIcon,
   GitPullRequestIcon,
   PlusIcon,
   RocketIcon,
   SettingsIcon,
-  SquarePenIcon,
   TerminalIcon,
   TriangleAlertIcon,
 } from "lucide-react";
@@ -40,12 +42,13 @@ import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import { useAppSettings } from "../appSettings";
 import { isElectron } from "../env";
 import { APP_STAGE_LABEL, APP_VERSION } from "../branding";
-import { isMacPlatform, newCommandId, newProjectId, newWorktreeId } from "../lib/utils";
-import { getNewThreadShortcutHint, isNewThreadShortcut } from "../newThreadShortcut";
+import { isMacPlatform, newCommandId, newProjectId } from "../lib/utils";
+import { isNewThreadShortcut } from "../newThreadShortcut";
 import { useStore } from "../store";
-import { isChatNewLocalShortcut, isChatNewShortcut } from "../keybindings";
+import { resolveShortcutCommand, shortcutKbdSequenceForCommand } from "../keybindings";
 import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
 import {
+  gitArchiveWorktreeMutationOptions,
   gitCreateWorktreeMutationOptions,
   gitRemoveWorktreeMutationOptions,
   gitStatusQueryOptions,
@@ -72,6 +75,7 @@ import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
 import { Collapsible, CollapsibleContent } from "./ui/collapsible";
 import { KbdTooltip } from "./ui/kbd-tooltip";
+import { Spinner } from "./ui/spinner";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import {
   SidebarContent,
@@ -90,17 +94,109 @@ import {
 } from "./ui/sidebar";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { isNonEmpty as isNonEmptyString } from "effect/String";
-import { resolveThreadStatusPill, shouldClearThreadSelectionOnMouseDown } from "./Sidebar.logic";
+import {
+  resolveThreadStatusPill,
+  resolveWorktreeDiffStat,
+  shouldClearThreadSelectionOnMouseDown,
+} from "./Sidebar.logic";
 import {
   createManagedWorktreeSeed,
   findRootWorktree,
   getRootWorktreeId,
+  materializeWorktreeRecord,
   worktreeDisplaySubtitle,
   worktreeDisplayTitle,
 } from "~/lib/worktrees";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_PREVIEW_LIMIT = 6;
+const SIDEBAR_WORKTREE_UI_STATE_KEY = "t3code:sidebar-worktree-ui:v1";
+
+interface PersistedSidebarWorktreeUiState {
+  collapsedWorktreeIds?: string[];
+  expandedThreadListsByWorktree?: string[];
+}
+
+function readPersistedSidebarWorktreeUiState(input: { worktreeIds: ReadonlySet<WorktreeId> }): {
+  collapsedWorktreeIds: ReadonlySet<WorktreeId>;
+  expandedThreadListsByWorktree: ReadonlySet<WorktreeId>;
+} {
+  const defaultCollapsedWorktreeIds = new Set(input.worktreeIds);
+  const defaultExpandedThreadListsByWorktree = new Set<WorktreeId>();
+
+  if (typeof window === "undefined") {
+    return {
+      collapsedWorktreeIds: defaultCollapsedWorktreeIds,
+      expandedThreadListsByWorktree: defaultExpandedThreadListsByWorktree,
+    };
+  }
+
+  try {
+    const raw = window.localStorage.getItem(SIDEBAR_WORKTREE_UI_STATE_KEY);
+    if (!raw) {
+      return {
+        collapsedWorktreeIds: defaultCollapsedWorktreeIds,
+        expandedThreadListsByWorktree: defaultExpandedThreadListsByWorktree,
+      };
+    }
+
+    const parsed = JSON.parse(raw) as PersistedSidebarWorktreeUiState;
+    const collapsedWorktreeIds = new Set<WorktreeId>();
+    const expandedThreadListsByWorktree = new Set<WorktreeId>();
+
+    for (const worktreeId of parsed.collapsedWorktreeIds ?? []) {
+      if (input.worktreeIds.has(worktreeId as WorktreeId)) {
+        collapsedWorktreeIds.add(worktreeId as WorktreeId);
+      }
+    }
+
+    for (const worktreeId of parsed.expandedThreadListsByWorktree ?? []) {
+      if (input.worktreeIds.has(worktreeId as WorktreeId)) {
+        expandedThreadListsByWorktree.add(worktreeId as WorktreeId);
+      }
+    }
+
+    for (const worktreeId of input.worktreeIds) {
+      if (
+        !collapsedWorktreeIds.has(worktreeId) &&
+        !(parsed.collapsedWorktreeIds ?? []).includes(worktreeId)
+      ) {
+        collapsedWorktreeIds.add(worktreeId);
+      }
+    }
+
+    return {
+      collapsedWorktreeIds,
+      expandedThreadListsByWorktree,
+    };
+  } catch {
+    return {
+      collapsedWorktreeIds: defaultCollapsedWorktreeIds,
+      expandedThreadListsByWorktree: defaultExpandedThreadListsByWorktree,
+    };
+  }
+}
+
+function persistSidebarWorktreeUiState(input: {
+  collapsedWorktreeIds: ReadonlySet<WorktreeId>;
+  expandedThreadListsByWorktree: ReadonlySet<WorktreeId>;
+}): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(
+      SIDEBAR_WORKTREE_UI_STATE_KEY,
+      JSON.stringify({
+        collapsedWorktreeIds: [...input.collapsedWorktreeIds],
+        expandedThreadListsByWorktree: [...input.expandedThreadListsByWorktree],
+      } satisfies PersistedSidebarWorktreeUiState),
+    );
+  } catch {
+    // Ignore storage failures so the sidebar keeps working.
+  }
+}
 
 async function copyTextToClipboard(text: string): Promise<void> {
   if (typeof navigator === "undefined" || navigator.clipboard?.writeText === undefined) {
@@ -215,11 +311,13 @@ function SortableProjectItem({
 export default function Sidebar() {
   const projects = useStore((store) => store.projects);
   const worktrees = useStore((store) => store.worktrees);
+  const archivedWorktrees = useStore((store) => store.archivedWorktrees);
   const threads = useStore((store) => store.threads);
   const markThreadUnread = useStore((store) => store.markThreadUnread);
   const toggleProject = useStore((store) => store.toggleProject);
   const setProjectExpanded = useStore((store) => store.setProjectExpanded);
   const reorderProjects = useStore((store) => store.reorderProjects);
+  const threadsHydrated = useStore((store) => store.threadsHydrated);
   const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearThreadDraft);
   const getDraftThreadByWorktreeId = useComposerDraftStore(
     (store) => store.getDraftThreadByWorktreeId,
@@ -238,6 +336,7 @@ export default function Sidebar() {
   );
   const navigate = useNavigate();
   const isOnSettings = useLocation({ select: (loc) => loc.pathname === "/settings" });
+  const isOnActivity = useLocation({ select: (loc) => loc.pathname === "/activity" });
   const { settings: appSettings } = useAppSettings();
   const routeThreadId = useParams({
     strict: false,
@@ -248,6 +347,7 @@ export default function Sidebar() {
     select: (config) => config.keybindings,
   });
   const queryClient = useQueryClient();
+  const archiveWorktreeMutation = useMutation(gitArchiveWorktreeMutationOptions({ queryClient }));
   const createWorktreeMutation = useMutation(gitCreateWorktreeMutationOptions({ queryClient }));
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
   const [addingProject, setAddingProject] = useState(false);
@@ -259,11 +359,12 @@ export default function Sidebar() {
   const [renamingThreadId, setRenamingThreadId] = useState<ThreadId | null>(null);
   const [renamingTitle, setRenamingTitle] = useState("");
   const [collapsedWorktreeIds, setCollapsedWorktreeIds] = useState<ReadonlySet<WorktreeId>>(
-    () => new Set(worktrees.map((worktree) => worktree.id)),
+    () => new Set(),
   );
   const knownWorktreeIdsRef = useRef<ReadonlySet<WorktreeId>>(
     new Set(worktrees.map((worktree) => worktree.id)),
   );
+  const restoredSidebarWorktreeUiStateRef = useRef(false);
   const [expandedThreadListsByWorktree, setExpandedThreadListsByWorktree] = useState<
     ReadonlySet<WorktreeId>
   >(() => new Set());
@@ -272,6 +373,7 @@ export default function Sidebar() {
   const dragInProgressRef = useRef(false);
   const suppressProjectClickAfterDragRef = useRef(false);
   const [desktopUpdateState, setDesktopUpdateState] = useState<DesktopUpdateState | null>(null);
+  const [pendingArchiveWorktreeId, setPendingArchiveWorktreeId] = useState<WorktreeId | null>(null);
   const selectedThreadIds = useThreadSelectionStore((s) => s.selectedThreadIds);
   const toggleThreadSelection = useThreadSelectionStore((s) => s.toggleThread);
   const rangeSelectTo = useThreadSelectionStore((s) => s.rangeSelectTo);
@@ -280,6 +382,16 @@ export default function Sidebar() {
   const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
   const shouldBrowseForProjectImmediately = isElectron;
   const shouldShowProjectPathEntry = addingProject && !shouldBrowseForProjectImmediately;
+  const allWorktrees = useMemo(
+    () => [...worktrees, ...archivedWorktrees],
+    [archivedWorktrees, worktrees],
+  );
+  const archiveWorktreeShortcut = useMemo(
+    () =>
+      shortcutKbdSequenceForCommand(keybindings, "worktree.archive") ??
+      (isMacPlatform(navigator.platform) ? ["Command", "Shift", "A"] : ["Ctrl", "Shift", "A"]),
+    [keybindings],
+  );
   const pendingApprovalByThreadId = useMemo(() => {
     const map = new Map<ThreadId, boolean>();
     for (const thread of threads) {
@@ -366,6 +478,14 @@ export default function Sidebar() {
     }
     return map;
   }, [gitStatusByCwd, worktreeGitTargets]);
+  const worktreeDiffStatById = useMemo(() => {
+    const map = new Map<WorktreeId, { additions: number; deletions: number } | null>();
+    for (const target of worktreeGitTargets) {
+      const status = target.cwd ? gitStatusByCwd.get(target.cwd) : undefined;
+      map.set(target.worktreeId, resolveWorktreeDiffStat(status));
+    }
+    return map;
+  }, [gitStatusByCwd, worktreeGitTargets]);
   const expandWorktree = useCallback((worktreeId: WorktreeId) => {
     setCollapsedWorktreeIds((previous) => {
       if (!previous.has(worktreeId)) {
@@ -390,9 +510,25 @@ export default function Sidebar() {
   }, []);
 
   useEffect(() => {
+    if (!threadsHydrated) {
+      return;
+    }
+
+    const currentWorktreeIds = new Set(worktrees.map((worktree) => worktree.id));
+
+    if (!restoredSidebarWorktreeUiStateRef.current) {
+      const restored = readPersistedSidebarWorktreeUiState({
+        worktreeIds: currentWorktreeIds,
+      });
+      restoredSidebarWorktreeUiStateRef.current = true;
+      knownWorktreeIdsRef.current = currentWorktreeIds;
+      setCollapsedWorktreeIds(restored.collapsedWorktreeIds);
+      setExpandedThreadListsByWorktree(restored.expandedThreadListsByWorktree);
+      return;
+    }
+
     setCollapsedWorktreeIds((previous) => {
       const knownWorktreeIds = knownWorktreeIdsRef.current;
-      const currentWorktreeIds = new Set(worktrees.map((worktree) => worktree.id));
       const next = new Set(previous);
       let changed = false;
 
@@ -414,7 +550,37 @@ export default function Sidebar() {
 
       return next;
     });
-  }, [worktrees]);
+
+    setExpandedThreadListsByWorktree((previous) => {
+      let changed = false;
+      const next = new Set<WorktreeId>();
+
+      for (const worktreeId of previous) {
+        if (!currentWorktreeIds.has(worktreeId)) {
+          changed = true;
+          continue;
+        }
+        next.add(worktreeId);
+      }
+
+      if (!changed && next.size === previous.size) {
+        return previous;
+      }
+
+      return next;
+    });
+  }, [threadsHydrated, worktrees]);
+
+  useEffect(() => {
+    if (!threadsHydrated || !restoredSidebarWorktreeUiStateRef.current) {
+      return;
+    }
+
+    persistSidebarWorktreeUiState({
+      collapsedWorktreeIds,
+      expandedThreadListsByWorktree,
+    });
+  }, [collapsedWorktreeIds, expandedThreadListsByWorktree, threadsHydrated]);
 
   const openPrLink = useCallback((event: React.MouseEvent<HTMLElement>, prUrl: string) => {
     event.preventDefault();
@@ -649,7 +815,7 @@ export default function Sidebar() {
         return;
       }
 
-      const projectWorktrees = worktrees.filter((worktree) => worktree.projectId === projectId);
+      const projectWorktrees = allWorktrees.filter((worktree) => worktree.projectId === projectId);
       const { slug, branch: newBranch } = createManagedWorktreeSeed({
         existingWorktrees: projectWorktrees,
         branchPrefix: appSettings.gitBranchPrefix,
@@ -662,17 +828,14 @@ export default function Sidebar() {
           newBranch,
           managedPathName: slug,
         });
-        const worktreeId = newWorktreeId();
-        await api.orchestration.dispatchCommand({
-          type: "worktree.create",
-          commandId: newCommandId(),
-          worktreeId,
+        const { worktreeId } = await materializeWorktreeRecord({
+          api,
           projectId,
           workspacePath: result.worktree.path,
           branch: result.worktree.branch,
           isRoot: false,
           branchRenamePending: true,
-          createdAt: new Date().toISOString(),
+          worktrees: allWorktrees,
         });
         await handleNewThread({
           projectId,
@@ -691,10 +854,69 @@ export default function Sidebar() {
     },
     [
       appSettings.gitBranchPrefix,
+      allWorktrees,
       createWorktreeMutation,
       handleNewThread,
       projects,
       queryClient,
+    ],
+  );
+
+  const handleArchiveWorktree = useCallback(
+    async (worktreeId: WorktreeId) => {
+      const api = readNativeApi();
+      if (!api) {
+        return;
+      }
+      const worktree = worktrees.find((entry) => entry.id === worktreeId);
+      if (!worktree || worktree.isRoot) {
+        return;
+      }
+      const project = projects.find((entry) => entry.id === worktree.projectId);
+      if (!project) {
+        return;
+      }
+
+      setPendingArchiveWorktreeId(worktreeId);
+      try {
+        await archiveWorktreeMutation.mutateAsync({
+          cwd: project.cwd,
+          worktreeId,
+          path: worktree.workspacePath,
+        });
+        await api.orchestration.dispatchCommand({
+          type: "worktree.archive",
+          commandId: newCommandId(),
+          worktreeId,
+        });
+
+        const routeThread = routeThreadId
+          ? (threads.find((thread) => thread.id === routeThreadId) ?? null)
+          : null;
+        const routeDraftThread =
+          routeThreadId !== null ? (draftThreadsByThreadId[routeThreadId] ?? null) : null;
+        const activeRouteWorktreeId =
+          routeThread?.worktreeId ?? routeDraftThread?.worktreeId ?? null;
+        if (activeRouteWorktreeId === worktreeId) {
+          await navigate({ to: "/" });
+        }
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Failed to archive worktree",
+          description: error instanceof Error ? error.message : "An unexpected error occurred.",
+        });
+      } finally {
+        setPendingArchiveWorktreeId((current) => (current === worktreeId ? null : current));
+      }
+    },
+    [
+      archiveWorktreeMutation,
+      draftThreadsByThreadId,
+      navigate,
+      projects,
+      routeThreadId,
+      threads,
       worktrees,
     ],
   );
@@ -1202,10 +1424,24 @@ export default function Sidebar() {
   );
 
   useEffect(() => {
+    const isTerminalFocused = (): boolean => {
+      const activeElement = document.activeElement;
+      if (!(activeElement instanceof HTMLElement)) {
+        return false;
+      }
+      if (activeElement.classList.contains("xterm-helper-textarea")) {
+        return true;
+      }
+      return activeElement.closest(".thread-terminal-drawer .xterm") !== null;
+    };
+
     const onWindowKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && selectedThreadIds.size > 0) {
         event.preventDefault();
         clearSelection();
+        return;
+      }
+      if (event.defaultPrevented) {
         return;
       }
 
@@ -1247,7 +1483,21 @@ export default function Sidebar() {
         });
         return;
       }
-      if (isChatNewLocalShortcut(event, keybindings)) {
+      const command = resolveShortcutCommand(event, keybindings, {
+        context: {
+          terminalFocus: isTerminalFocused(),
+          terminalOpen: false,
+        },
+      });
+
+      if (command === "worktree.archive") {
+        if (!activeWorktree || activeWorktree.isRoot) return;
+        event.preventDefault();
+        void handleArchiveWorktree(activeWorktree.id);
+        return;
+      }
+
+      if (command === "chat.newLocal") {
         if (!activeProjectId || !activeWorktreeId) return;
         event.preventDefault();
         void handleNewThread({
@@ -1260,7 +1510,7 @@ export default function Sidebar() {
         return;
       }
 
-      if (!isChatNewShortcut(event, keybindings)) return;
+      if (command !== "chat.new") return;
       if (!activeProjectId || !activeWorktreeId) return;
       event.preventDefault();
       void handleNewThread({
@@ -1288,6 +1538,7 @@ export default function Sidebar() {
   }, [
     clearSelection,
     getDraftThread,
+    handleArchiveWorktree,
     handleNewThread,
     keybindings,
     projects,
@@ -1357,11 +1608,6 @@ export default function Sidebar() {
         : shouldHighlightDesktopUpdateError(desktopUpdateState)
           ? "text-rose-500 animate-pulse"
           : "text-amber-500 animate-pulse";
-  const newThreadShortcut = useMemo<ReadonlyArray<string> | undefined>(
-    () => getNewThreadShortcutHint(),
-    [],
-  );
-
   const handleDesktopUpdateButtonClick = useCallback(() => {
     const bridge = window.desktopBridge;
     if (!bridge || !desktopUpdateState) return;
@@ -1519,31 +1765,29 @@ export default function Sidebar() {
             </Alert>
           </SidebarGroup>
         ) : null}
+        <SidebarGroup className="px-2 pt-2 pb-0">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className={`h-8 w-full justify-start gap-2 px-2 text-sm ${
+              isOnActivity
+                ? "bg-accent/80 text-foreground hover:bg-accent"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+            onClick={() => {
+              void navigate({ to: "/activity" });
+            }}
+          >
+            <HistoryIcon className="size-3.5" />
+            <span>Activity</span>
+          </Button>
+        </SidebarGroup>
         <SidebarGroup className="px-2 py-2">
           <div className="relative mb-1 flex min-h-7 items-center px-2">
             <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
               Projects
             </span>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <button
-                    type="button"
-                    aria-label="Add project"
-                    aria-pressed={shouldShowProjectPathEntry}
-                    className="absolute top-1/2 right-1 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"
-                    onClick={handleStartAddProject}
-                  />
-                }
-              >
-                <PlusIcon
-                  className={`size-3.5 transition-transform duration-150 ${
-                    shouldShowProjectPathEntry ? "rotate-45" : "rotate-0"
-                  }`}
-                />
-              </TooltipTrigger>
-              <TooltipPopup side="right">Add project</TooltipPopup>
-            </Tooltip>
           </div>
 
           {shouldShowProjectPathEntry && (
@@ -1761,6 +2005,8 @@ export default function Sidebar() {
                                   worktree,
                                   worktreeDisplayBranchById.get(worktree.id),
                                 );
+                                const worktreeDiffStat =
+                                  worktreeDiffStatById.get(worktree.id) ?? null;
                                 const worktreeSubtitle = worktreeDisplaySubtitle(worktree, project);
                                 const worktreePath = worktree.isRoot
                                   ? null
@@ -1768,6 +2014,8 @@ export default function Sidebar() {
                                 const worktreeEnvMode: DraftThreadEnvMode = worktree.isRoot
                                   ? "local"
                                   : "worktree";
+                                const isArchivingWorktree =
+                                  pendingArchiveWorktreeId === worktree.id;
 
                                 return (
                                   <SidebarMenuSubItem key={worktree.id} className="w-full">
@@ -1777,7 +2025,7 @@ export default function Sidebar() {
                                           render={<button type="button" />}
                                           size="sm"
                                           isActive={isWorktreeActive}
-                                          className={`h-7 w-full translate-x-0 cursor-pointer justify-start pr-8 pl-2 text-left hover:bg-accent hover:text-foreground ${
+                                          className={`h-7 w-full translate-x-0 cursor-pointer justify-start pr-2 pl-2 text-left hover:bg-accent hover:text-foreground ${
                                             isWorktreeActive
                                               ? "bg-accent/70 text-foreground"
                                               : "text-muted-foreground"
@@ -1822,7 +2070,7 @@ export default function Sidebar() {
                                           </button>
                                           <div className="min-w-0 flex-1">
                                             <div
-                                              className={`truncate text-[11px] font-medium ${
+                                              className={`min-w-0 truncate text-[11px] font-medium ${
                                                 isWorktreeActive
                                                   ? "text-foreground/90"
                                                   : "text-muted-foreground"
@@ -1836,32 +2084,79 @@ export default function Sidebar() {
                                               </div>
                                             ) : null}
                                           </div>
+                                          {worktree.isRoot ? (
+                                            worktreeDiffStat ? (
+                                              <span className="ml-auto inline-flex shrink-0 items-center gap-1.5 text-right font-mono text-[10px] tabular-nums">
+                                                <span className="text-success">
+                                                  +{worktreeDiffStat.additions}
+                                                </span>
+                                                <span className="text-destructive">
+                                                  -{worktreeDiffStat.deletions}
+                                                </span>
+                                              </span>
+                                            ) : null
+                                          ) : (
+                                            <div className="mt-0.5 ml-auto grid shrink-0 self-start items-center justify-items-end">
+                                              <div className="grid min-h-5 min-w-5 items-center justify-items-end">
+                                                {worktreeDiffStat ? (
+                                                  <span
+                                                    className={`col-start-1 row-start-1 inline-flex items-center gap-1.5 text-right font-mono text-[10px] tabular-nums transition-opacity ${
+                                                      isArchivingWorktree
+                                                        ? "opacity-0"
+                                                        : "opacity-100 group-hover/worktree:opacity-0 group-focus-within/worktree:opacity-0"
+                                                    }`}
+                                                  >
+                                                    <span className="text-success">
+                                                      +{worktreeDiffStat.additions}
+                                                    </span>
+                                                    <span className="text-destructive">
+                                                      -{worktreeDiffStat.deletions}
+                                                    </span>
+                                                  </span>
+                                                ) : null}
+                                                <KbdTooltip
+                                                  label={
+                                                    isArchivingWorktree
+                                                      ? "Archiving worktree"
+                                                      : "Archive worktree"
+                                                  }
+                                                  shortcut={archiveWorktreeShortcut}
+                                                >
+                                                  <button
+                                                    type="button"
+                                                    aria-label={
+                                                      isArchivingWorktree
+                                                        ? "Archiving worktree"
+                                                        : "Archive worktree"
+                                                    }
+                                                    className={`col-start-1 row-start-1 inline-flex size-5 items-center justify-center rounded-sm text-muted-foreground transition-colors transition-opacity hover:bg-secondary hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring ${
+                                                      isArchivingWorktree
+                                                        ? "opacity-100"
+                                                        : "opacity-0 group-hover/worktree:opacity-100 group-focus-within/worktree:opacity-100"
+                                                    }`}
+                                                    onClick={(event) => {
+                                                      event.preventDefault();
+                                                      event.stopPropagation();
+                                                      void handleArchiveWorktree(worktree.id);
+                                                    }}
+                                                    disabled={isArchivingWorktree}
+                                                  >
+                                                    {isArchivingWorktree ? (
+                                                      <Spinner className="size-3" />
+                                                    ) : (
+                                                      <ArchiveIcon className="size-3" />
+                                                    )}
+                                                    <span className="sr-only">
+                                                      {isArchivingWorktree
+                                                        ? "Archiving worktree"
+                                                        : "Archive worktree"}
+                                                    </span>
+                                                  </button>
+                                                </KbdTooltip>
+                                              </div>
+                                            </div>
+                                          )}
                                         </SidebarMenuSubButton>
-                                        <KbdTooltip label="New thread" shortcut={newThreadShortcut}>
-                                          <SidebarMenuAction
-                                            render={
-                                              <button
-                                                type="button"
-                                                aria-label={`Create new thread in ${worktreeTitle}`}
-                                              />
-                                            }
-                                            showOnHover
-                                            className="top-1 right-1 size-5 rounded-md p-0 text-muted-foreground/70 hover:bg-secondary hover:text-foreground"
-                                            onClick={(event) => {
-                                              event.preventDefault();
-                                              event.stopPropagation();
-                                              void handleNewThread({
-                                                projectId: project.id,
-                                                worktreeId: worktree.id,
-                                                branch: worktree.branch,
-                                                worktreePath,
-                                                envMode: worktreeEnvMode,
-                                              });
-                                            }}
-                                          >
-                                            <SquarePenIcon className="size-3.5" />
-                                          </SidebarMenuAction>
-                                        </KbdTooltip>
                                       </div>
 
                                       <CollapsibleContent keepMounted>
@@ -2185,11 +2480,24 @@ export default function Sidebar() {
 
       <SidebarSeparator />
       <SidebarFooter className="p-2">
-        <SidebarMenu>
-          <SidebarMenuItem>
+        <SidebarMenu className="flex-row items-center gap-2">
+          <SidebarMenuItem className="flex-1">
+            <SidebarMenuButton
+              size="sm"
+              isActive={shouldShowProjectPathEntry}
+              tooltip={shouldShowProjectPathEntry ? "Close add project" : "Add project"}
+              className="gap-2 px-2 py-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
+              onClick={handleStartAddProject}
+            >
+              <FolderPlusIcon className="size-3.5" />
+              <span className="text-xs">Add</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem className="shrink-0">
             {isOnSettings ? (
               <SidebarMenuButton
                 size="sm"
+                tooltip="Back"
                 className="gap-2 px-2 py-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
                 onClick={() => window.history.back()}
               >
@@ -2199,6 +2507,7 @@ export default function Sidebar() {
             ) : (
               <SidebarMenuButton
                 size="sm"
+                tooltip="Settings"
                 className="gap-2 px-2 py-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
                 onClick={() => void navigate({ to: "/settings" })}
               >

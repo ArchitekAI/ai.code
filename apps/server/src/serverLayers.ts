@@ -33,9 +33,11 @@ import { GitCoreLive } from "./git/Layers/GitCore";
 import { GitHubCliLive } from "./git/Layers/GitHubCli";
 import { CodexTextGenerationLive } from "./git/Layers/CodexTextGeneration";
 import { GitServiceLive } from "./git/Layers/GitService";
+import { WorktreeArchiveServiceLive } from "./git/Layers/WorktreeArchive";
 import { BunPtyAdapterLive } from "./terminal/Layers/BunPTY";
 import { NodePtyAdapterLive } from "./terminal/Layers/NodePTY";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService";
+import { WorktreeArchiveMetadataRepositoryLive } from "./persistence/Layers/WorktreeArchiveMetadata";
 
 export function makeServerProviderLayer(): Layer.Layer<
   ProviderService,
@@ -121,10 +123,18 @@ export function makeServerRuntimeServicesLayer() {
     Layer.provideMerge(textGenerationLayer),
   );
 
+  const worktreeArchiveLayer = WorktreeArchiveServiceLive.pipe(
+    Layer.provideMerge(gitCoreLayer),
+    Layer.provideMerge(terminalLayer),
+    Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
+    Layer.provideMerge(WorktreeArchiveMetadataRepositoryLive),
+  );
+
   return Layer.mergeAll(
     orchestrationReactorLayer,
     gitCoreLayer,
     gitManagerLayer,
+    worktreeArchiveLayer,
     terminalLayer,
     KeybindingsLive,
   ).pipe(Layer.provideMerge(NodeServices.layer));

@@ -1,4 +1,4 @@
-import type { GitStackedAction } from "@repo/contracts";
+import type { GitStackedAction, WorktreeId } from "@repo/contracts";
 import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "../nativeApi";
 
@@ -16,6 +16,9 @@ export const gitQueryKeys = {
 export const gitMutationKeys = {
   init: (cwd: string | null) => ["git", "mutation", "init", cwd] as const,
   checkout: (cwd: string | null) => ["git", "mutation", "checkout", cwd] as const,
+  archiveWorktree: (cwd: string | null) => ["git", "mutation", "archive-worktree", cwd] as const,
+  unarchiveWorktree: (cwd: string | null) =>
+    ["git", "mutation", "unarchive-worktree", cwd] as const,
   runStackedAction: (cwd: string | null) => ["git", "mutation", "run-stacked-action", cwd] as const,
   pull: (cwd: string | null) => ["git", "mutation", "pull", cwd] as const,
   preparePullRequestThread: (cwd: string | null) =>
@@ -179,6 +182,40 @@ export function gitCreateWorktreeMutationOptions(input: { queryClient: QueryClie
       });
     },
     mutationKey: ["git", "mutation", "create-worktree"] as const,
+    onSettled: async () => {
+      await invalidateGitQueries(input.queryClient);
+    },
+  });
+}
+
+export function gitArchiveWorktreeMutationOptions(input: { queryClient: QueryClient }) {
+  return mutationOptions({
+    mutationFn: async ({
+      cwd,
+      worktreeId,
+      path,
+    }: {
+      cwd: string;
+      worktreeId: WorktreeId;
+      path: string;
+    }) => {
+      const api = ensureNativeApi();
+      return api.git.archiveWorktree({ cwd, worktreeId, path });
+    },
+    mutationKey: ["git", "mutation", "archive-worktree"] as const,
+    onSettled: async () => {
+      await invalidateGitQueries(input.queryClient);
+    },
+  });
+}
+
+export function gitUnarchiveWorktreeMutationOptions(input: { queryClient: QueryClient }) {
+  return mutationOptions({
+    mutationFn: async ({ cwd, worktreeId }: { cwd: string; worktreeId: WorktreeId }) => {
+      const api = ensureNativeApi();
+      return api.git.unarchiveWorktree({ cwd, worktreeId });
+    },
+    mutationKey: ["git", "mutation", "unarchive-worktree"] as const,
     onSettled: async () => {
       await invalidateGitQueries(input.queryClient);
     },

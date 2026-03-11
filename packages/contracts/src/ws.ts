@@ -18,6 +18,7 @@ import {
   OrchestrationReplayEventsInput,
 } from "./orchestration";
 import {
+  GitArchiveWorktreeInput,
   GitCheckoutInput,
   GitCreateBranchInput,
   GitPreparePullRequestThreadInput,
@@ -29,6 +30,7 @@ import {
   GitRemoveWorktreeInput,
   GitRunStackedActionInput,
   GitStatusInput,
+  GitUnarchiveWorktreeInput,
 } from "./git";
 import {
   TerminalClearInput,
@@ -64,6 +66,8 @@ export const WS_METHODS = {
   gitListBranches: "git.listBranches",
   gitCreateWorktree: "git.createWorktree",
   gitRemoveWorktree: "git.removeWorktree",
+  gitArchiveWorktree: "git.archiveWorktree",
+  gitUnarchiveWorktree: "git.unarchiveWorktree",
   gitCreateBranch: "git.createBranch",
   gitCheckout: "git.checkout",
   gitInit: "git.init",
@@ -128,6 +132,8 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.gitListBranches, GitListBranchesInput),
   tagRequestBody(WS_METHODS.gitCreateWorktree, GitCreateWorktreeInput),
   tagRequestBody(WS_METHODS.gitRemoveWorktree, GitRemoveWorktreeInput),
+  tagRequestBody(WS_METHODS.gitArchiveWorktree, GitArchiveWorktreeInput),
+  tagRequestBody(WS_METHODS.gitUnarchiveWorktree, GitUnarchiveWorktreeInput),
   tagRequestBody(WS_METHODS.gitCreateBranch, GitCreateBranchInput),
   tagRequestBody(WS_METHODS.gitCheckout, GitCheckoutInput),
   tagRequestBody(WS_METHODS.gitInit, GitInitInput),

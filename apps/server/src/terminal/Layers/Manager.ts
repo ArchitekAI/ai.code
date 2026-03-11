@@ -1089,6 +1089,16 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     return [...this.sessions.values()].filter((session) => session.threadId === threadId);
   }
 
+  hasRunningSubprocessForThreads(threadIds: ReadonlyArray<string>): boolean {
+    if (threadIds.length === 0) {
+      return false;
+    }
+    const trackedThreadIds = new Set(threadIds);
+    return [...this.sessions.values()].some(
+      (session) => trackedThreadIds.has(session.threadId) && session.hasRunningSubprocess,
+    );
+  }
+
   private async deleteAllHistoryForThread(threadId: string): Promise<void> {
     const threadPrefix = `${toSafeThreadId(threadId)}_`;
     try {
@@ -1212,6 +1222,15 @@ export const TerminalManagerLive = Layer.effect(
         Effect.tryPromise({
           try: () => runtime.close(input),
           catch: (cause) => new TerminalError({ message: "Failed to close terminal", cause }),
+        }),
+      hasRunningSubprocessForThreads: (threadIds) =>
+        Effect.try({
+          try: () => runtime.hasRunningSubprocessForThreads(threadIds),
+          catch: (cause) =>
+            new TerminalError({
+              message: "Failed to inspect terminal subprocesses",
+              cause,
+            }),
         }),
       subscribe: (listener) =>
         Effect.sync(() => {

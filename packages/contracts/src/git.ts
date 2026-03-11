@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { NonNegativeInt, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas";
+import { NonNegativeInt, PositiveInt, TrimmedNonEmptyString, WorktreeId } from "./baseSchemas";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 
@@ -33,6 +33,10 @@ export type GitBranch = typeof GitBranch.Type;
 const GitWorktree = Schema.Struct({
   path: TrimmedNonEmptyStringSchema,
   branch: TrimmedNonEmptyStringSchema,
+});
+const GitArchivedWorktree = Schema.Struct({
+  path: TrimmedNonEmptyStringSchema,
+  branch: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
 });
 const GitResolvedPullRequest = Schema.Struct({
   number: PositiveInt,
@@ -98,6 +102,19 @@ export const GitRemoveWorktreeInput = Schema.Struct({
 });
 export type GitRemoveWorktreeInput = typeof GitRemoveWorktreeInput.Type;
 
+export const GitArchiveWorktreeInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  worktreeId: WorktreeId,
+  path: TrimmedNonEmptyStringSchema,
+});
+export type GitArchiveWorktreeInput = typeof GitArchiveWorktreeInput.Type;
+
+export const GitUnarchiveWorktreeInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  worktreeId: WorktreeId,
+});
+export type GitUnarchiveWorktreeInput = typeof GitUnarchiveWorktreeInput.Type;
+
 export const GitCreateBranchInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   branch: TrimmedNonEmptyStringSchema,
@@ -158,6 +175,17 @@ export const GitCreateWorktreeResult = Schema.Struct({
   worktree: GitWorktree,
 });
 export type GitCreateWorktreeResult = typeof GitCreateWorktreeResult.Type;
+
+export const GitArchiveWorktreeResult = Schema.Struct({
+  worktree: GitArchivedWorktree,
+});
+export type GitArchiveWorktreeResult = typeof GitArchiveWorktreeResult.Type;
+
+export const GitUnarchiveWorktreeResult = Schema.Struct({
+  worktree: GitArchivedWorktree,
+  warning: Schema.NullOr(Schema.String),
+});
+export type GitUnarchiveWorktreeResult = typeof GitUnarchiveWorktreeResult.Type;
 
 export const GitResolvePullRequestResult = Schema.Struct({
   pullRequest: GitResolvedPullRequest,

@@ -8,6 +8,7 @@ import {
 } from "@repo/contracts";
 import {
   formatShortcutLabel,
+  formatShortcutKbdSequence,
   isChatNewShortcut,
   isChatNewLocalShortcut,
   isDiffToggleShortcut,
@@ -19,6 +20,7 @@ import {
   isTerminalToggleShortcut,
   resolveShortcutCommand,
   shortcutLabelForCommand,
+  shortcutKbdSequenceForCommand,
   terminalNavigationShortcutData,
   type ShortcutEventLike,
 } from "./keybindings";
@@ -99,6 +101,11 @@ const DEFAULT_BINDINGS = compile([
   },
   { shortcut: modShortcut("o", { shiftKey: true }), command: "chat.new" },
   { shortcut: modShortcut("n", { shiftKey: true }), command: "chat.newLocal" },
+  {
+    shortcut: modShortcut("a", { shiftKey: true }),
+    command: "worktree.archive",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
   { shortcut: modShortcut("o"), command: "editor.openFavorite" },
 ]);
 
@@ -238,6 +245,10 @@ describe("shortcutLabelForCommand", () => {
     assert.strictEqual(shortcutLabelForCommand(DEFAULT_BINDINGS, "chat.new", "MacIntel"), "⇧⌘O");
     assert.strictEqual(shortcutLabelForCommand(DEFAULT_BINDINGS, "diff.toggle", "Linux"), "Ctrl+D");
     assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "worktree.archive", "MacIntel"),
+      "⇧⌘A",
+    );
+    assert.strictEqual(
       shortcutLabelForCommand(DEFAULT_BINDINGS, "editor.openFavorite", "Linux"),
       "Ctrl+O",
     );
@@ -296,6 +307,23 @@ describe("chat/editor shortcuts", () => {
         platform: "MacIntel",
         context: { terminalFocus: true },
       }),
+    );
+  });
+
+  it("resolves worktree archive shortcut outside terminal focus", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "a", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "worktree.archive",
+    );
+    assert.notStrictEqual(
+      resolveShortcutCommand(event({ key: "a", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: true },
+      }),
+      "worktree.archive",
     );
   });
 });
@@ -393,6 +421,33 @@ describe("formatShortcutLabel", () => {
   it("formats labels for plus key", () => {
     assert.strictEqual(formatShortcutLabel(modShortcut("+"), "MacIntel"), "⌘+");
     assert.strictEqual(formatShortcutLabel(modShortcut("+"), "Linux"), "Ctrl++");
+  });
+});
+
+describe("formatShortcutKbdSequence", () => {
+  it("formats macOS shortcuts as discrete keys", () => {
+    assert.deepEqual(formatShortcutKbdSequence(modShortcut("a", { shiftKey: true }), "MacIntel"), [
+      "Shift",
+      "Command",
+      "A",
+    ]);
+  });
+
+  it("formats non-macOS shortcuts as discrete keys", () => {
+    assert.deepEqual(formatShortcutKbdSequence(modShortcut("a", { shiftKey: true }), "Linux"), [
+      "Ctrl",
+      "Shift",
+      "A",
+    ]);
+  });
+});
+
+describe("shortcutKbdSequenceForCommand", () => {
+  it("returns discrete keys for the latest matching command", () => {
+    assert.deepEqual(
+      shortcutKbdSequenceForCommand(DEFAULT_BINDINGS, "worktree.archive", "MacIntel"),
+      ["Shift", "Command", "A"],
+    );
   });
 });
 

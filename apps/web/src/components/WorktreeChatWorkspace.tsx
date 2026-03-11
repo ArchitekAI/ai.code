@@ -126,12 +126,29 @@ function readLastInvokedScriptByProjectFromStorage(): Record<string, string> {
 function DockThreadPanel({
   params,
   routeThreadId,
-}: IDockviewPanelProps<WorktreeDockPanelParams> & { routeThreadId: ThreadId }) {
+  focusThreadId,
+  onActivateThread,
+  api,
+}: IDockviewPanelProps<WorktreeDockPanelParams> & {
+  routeThreadId: ThreadId;
+  focusThreadId: ThreadId;
+  onActivateThread: (threadId: ThreadId) => void;
+}) {
+  const activateThread = useCallback(() => {
+    api.setActive();
+    onActivateThread(params.threadId);
+  }, [api, onActivateThread, params.threadId]);
+
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
+    <div
+      className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
+      onFocusCapture={activateThread}
+      onPointerDownCapture={activateThread}
+    >
       <ChatView
         threadId={params.threadId}
         routeActive={params.threadId === routeThreadId}
+        focusHotkeyActive={params.threadId === focusThreadId}
         showHeader={false}
         showTerminalDrawer={false}
         showPlanSidebar={false}
@@ -322,6 +339,7 @@ export default function WorktreeChatWorkspace({
   );
   const setLayout = useWorktreeChatLayoutStore((store) => store.setLayout);
   const [dockviewApi, setDockviewApi] = useState<DockviewApi | null>(null);
+  const [focusedDockThreadId, setFocusedDockThreadId] = useState<ThreadId>(threadId);
   const [terminalFocusRequestId, setTerminalFocusRequestId] = useState(0);
   const restoredRef = useRef(false);
   const pendingPanelReferenceIdRef = useRef<ThreadId | null>(null);
@@ -811,13 +829,35 @@ export default function WorktreeChatWorkspace({
     ],
   );
 
+  const activateFocusedThread = useCallback(
+    (nextThreadId: ThreadId, options?: { syncRoute?: boolean }) => {
+      setFocusedDockThreadId((current) => (current === nextThreadId ? current : nextThreadId));
+
+      if (options?.syncRoute === false || nextThreadId === threadId) {
+        return;
+      }
+
+      void navigate({
+        to: "/$threadId",
+        params: { threadId: nextThreadId },
+        replace: true,
+      });
+    },
+    [navigate, threadId],
+  );
+
   const dockComponents = useMemo(
     () => ({
       [DOCKVIEW_THREAD_COMPONENT]: (props: IDockviewPanelProps<WorktreeDockPanelParams>) => (
-        <DockThreadPanel {...props} routeThreadId={threadId} />
+        <DockThreadPanel
+          {...props}
+          focusThreadId={focusedDockThreadId}
+          onActivateThread={activateFocusedThread}
+          routeThreadId={threadId}
+        />
       ),
     }),
-    [threadId],
+    [activateFocusedThread, focusedDockThreadId, threadId],
   );
 
   useEffect(() => {
@@ -901,26 +941,37 @@ export default function WorktreeChatWorkspace({
   useEffect(() => {
     if (!dockviewApi) return;
 
+    const syncFocusedThread = (nextThreadId: ThreadId | null | undefined, syncRoute: boolean) => {
+      if (!nextThreadId) {
+        return;
+      }
+
+      activateFocusedThread(nextThreadId, { syncRoute });
+    };
+
+    syncFocusedThread(
+      (dockviewApi.activeGroup?.activePanel?.id ??
+        dockviewApi.activePanel?.id ??
+        null) as ThreadId | null,
+      false,
+    );
+
     const layoutDisposable = dockviewApi.onDidLayoutChange(() => {
       setLayout(worktreeId, dockviewApi.toJSON());
     });
     const activePanelDisposable = dockviewApi.onDidActivePanelChange((panel) => {
-      const nextThreadId = panel?.id;
-      if (!nextThreadId || nextThreadId === threadId) {
-        return;
-      }
-      void navigate({
-        to: "/$threadId",
-        params: { threadId: nextThreadId as ThreadId },
-        replace: true,
-      });
+      syncFocusedThread((panel?.id ?? null) as ThreadId | null, true);
+    });
+    const activeGroupDisposable = dockviewApi.onDidActiveGroupChange((group) => {
+      syncFocusedThread((group?.activePanel?.id ?? null) as ThreadId | null, true);
     });
 
     return () => {
       layoutDisposable.dispose();
       activePanelDisposable.dispose();
+      activeGroupDisposable.dispose();
     };
-  }, [dockviewApi, navigate, setLayout, threadId, worktreeId]);
+  }, [activateFocusedThread, dockviewApi, setLayout, worktreeId]);
 
   useEffect(() => {
     if (import.meta.env.MODE !== "test") {

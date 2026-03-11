@@ -1,5 +1,7 @@
 import type {
   GitCheckoutInput,
+  GitArchiveWorktreeInput,
+  GitArchiveWorktreeResult,
   GitCreateBranchInput,
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
@@ -17,6 +19,8 @@ import type {
   GitRunStackedActionResult,
   GitStatusInput,
   GitStatusResult,
+  GitUnarchiveWorktreeInput,
+  GitUnarchiveWorktreeResult,
 } from "./git";
 import type {
   ProjectSearchEntriesInput,
@@ -138,6 +142,8 @@ export interface NativeApi {
     listBranches: (input: GitListBranchesInput) => Promise<GitListBranchesResult>;
     createWorktree: (input: GitCreateWorktreeInput) => Promise<GitCreateWorktreeResult>;
     removeWorktree: (input: GitRemoveWorktreeInput) => Promise<void>;
+    archiveWorktree: (input: GitArchiveWorktreeInput) => Promise<GitArchiveWorktreeResult>;
+    unarchiveWorktree: (input: GitUnarchiveWorktreeInput) => Promise<GitUnarchiveWorktreeResult>;
     createBranch: (input: GitCreateBranchInput) => Promise<void>;
     checkout: (input: GitCheckoutInput) => Promise<void>;
     init: (input: GitInitInput) => Promise<void>;

@@ -100,6 +100,13 @@ export interface TerminalManagerShape {
   readonly close: (input: TerminalCloseInput) => Effect.Effect<void, TerminalError>;
 
   /**
+   * Check whether any tracked thread currently has a running terminal subprocess.
+   */
+  readonly hasRunningSubprocessForThreads: (
+    threadIds: ReadonlyArray<string>,
+  ) => Effect.Effect<boolean, TerminalError>;
+
+  /**
    * Subscribe to terminal runtime events.
    */
   readonly subscribe: (listener: (event: TerminalEvent) => void) => Effect.Effect<() => void>;

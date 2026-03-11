@@ -21,7 +21,9 @@ import { Debouncer } from "@tanstack/react-pacer";
 export interface AppState {
   projects: Project[];
   worktrees: Worktree[];
+  archivedWorktrees: Worktree[];
   threads: Thread[];
+  archivedThreads: Thread[];
   threadsHydrated: boolean;
 }
 
@@ -41,7 +43,9 @@ const LEGACY_PERSISTED_STATE_KEYS = [
 const initialState: AppState = {
   projects: [],
   worktrees: [],
+  archivedWorktrees: [],
   threads: [],
+  archivedThreads: [],
   threadsHydrated: false,
 };
 const persistedExpandedProjectCwds = new Set<string>();
@@ -241,15 +245,11 @@ function toAttachmentPreviewUrl(rawUrl: string): string {
   return rawUrl;
 }
 
-function mapWorktreesFromReadModel(
-  incoming: OrchestrationReadModel["worktrees"],
-  previous: Worktree[],
-): Worktree[] {
-  const previousById = new Map(previous.map((worktree) => [worktree.id, worktree] as const));
+function mapWorktreesFromReadModel(incoming: OrchestrationReadModel["worktrees"]): Worktree[] {
   return incoming
     .filter((worktree) => worktree.deletedAt === null)
     .map((worktree) => {
-      const existing = previousById.get(worktree.id);
+      const archivedAt = worktree.isRoot ? null : (worktree.archivedAt ?? null);
       return {
         id: worktree.id,
         projectId: worktree.projectId,
@@ -259,9 +259,9 @@ function mapWorktreesFromReadModel(
         branchRenamePending: worktree.branchRenamePending,
         createdAt: worktree.createdAt,
         updatedAt: worktree.updatedAt,
+        archivedAt,
         deletedAt: worktree.deletedAt,
-        ...(existing ? {} : {}),
-      } satisfies Worktree;
+      };
     })
     .toSorted((left, right) => {
       if (left.projectId !== right.projectId) {
@@ -274,24 +274,15 @@ function mapWorktreesFromReadModel(
     });
 }
 
-function attachmentPreviewRoutePath(attachmentId: string): string {
-  return `/attachments/${encodeURIComponent(attachmentId)}`;
-}
-
-// ── Pure state transition functions ────────────────────────────────────
-
-export function syncServerReadModel(state: AppState, readModel: OrchestrationReadModel): AppState {
-  const projects = mapProjectsFromReadModel(
-    readModel.projects.filter((project) => project.deletedAt === null),
-    state.projects,
-  );
-  const worktrees = mapWorktreesFromReadModel(readModel.worktrees, state.worktrees);
-  const worktreeById = new Map(worktrees.map((worktree) => [worktree.id, worktree] as const));
-  const existingThreadById = new Map(state.threads.map((thread) => [thread.id, thread] as const));
+function mapThreadsFromReadModel(input: {
+  readonly incoming: OrchestrationReadModel["threads"];
+  readonly worktreeById: ReadonlyMap<Worktree["id"], Worktree>;
+  readonly existingThreadById: ReadonlyMap<Thread["id"], Thread>;
+}): Thread[] {
   const threads: Thread[] = [];
-  for (const thread of readModel.threads.filter((entry) => entry.deletedAt === null)) {
-    const existing = existingThreadById.get(thread.id);
-    const worktree = worktreeById.get(thread.worktreeId);
+  for (const thread of input.incoming.filter((entry) => entry.deletedAt === null)) {
+    const existing = input.existingThreadById.get(thread.id);
+    const worktree = input.worktreeById.get(thread.worktreeId);
     if (!worktree) {
       continue;
     }
@@ -363,14 +354,50 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
         checkpointRef: checkpoint.checkpointRef,
         files: checkpoint.files.map((file) => ({ ...file })),
       })),
-      activities: thread.activities.map((activity) => ({ ...activity })),
+      activities: [...thread.activities],
     });
   }
+  return threads;
+}
+
+function attachmentPreviewRoutePath(attachmentId: string): string {
+  return `/attachments/${encodeURIComponent(attachmentId)}`;
+}
+
+// ── Pure state transition functions ────────────────────────────────────
+
+export function syncServerReadModel(state: AppState, readModel: OrchestrationReadModel): AppState {
+  const projects = mapProjectsFromReadModel(
+    readModel.projects.filter((project) => project.deletedAt === null),
+    state.projects,
+  );
+  const allWorktrees = mapWorktreesFromReadModel(readModel.worktrees);
+  const worktrees = allWorktrees.filter((worktree) => worktree.archivedAt == null);
+  const archivedWorktrees = allWorktrees.filter((worktree) => worktree.archivedAt != null);
+  const activeWorktreeById = new Map(worktrees.map((worktree) => [worktree.id, worktree] as const));
+  const archivedWorktreeById = new Map(
+    archivedWorktrees.map((worktree) => [worktree.id, worktree] as const),
+  );
+  const existingThreadById = new Map(
+    [...state.threads, ...state.archivedThreads].map((thread) => [thread.id, thread] as const),
+  );
+  const threads = mapThreadsFromReadModel({
+    incoming: readModel.threads,
+    worktreeById: activeWorktreeById,
+    existingThreadById,
+  });
+  const archivedThreads = mapThreadsFromReadModel({
+    incoming: readModel.threads,
+    worktreeById: archivedWorktreeById,
+    existingThreadById,
+  });
   return {
     ...state,
     projects,
     worktrees,
+    archivedWorktrees,
     threads,
+    archivedThreads,
     threadsHydrated: true,
   };
 }

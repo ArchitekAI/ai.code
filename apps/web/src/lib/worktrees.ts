@@ -1,7 +1,8 @@
+import type { NativeApi, ProjectId, WorktreeId } from "@repo/contracts";
 import type { Project, Worktree } from "~/types";
 import { buildPrefixedBranchName } from "@repo/shared/git";
 import { rootWorktreeIdForProject } from "@repo/shared/worktrees";
-import type { ProjectId, WorktreeId } from "@repo/contracts";
+import { newCommandId, newWorktreeId } from "./utils";
 
 const NATURE_ADJECTIVES = [
   "amber",
@@ -173,6 +174,79 @@ export function findRootWorktree(
   worktrees: readonly Worktree[],
 ): Worktree | undefined {
   return worktrees.find((worktree) => worktree.projectId === projectId && worktree.isRoot);
+}
+
+export function findProjectWorktreeByPath(input: {
+  readonly projectId: ProjectId;
+  readonly workspacePath: string;
+  readonly worktrees: readonly Worktree[];
+}): Worktree | undefined {
+  return input.worktrees.find(
+    (worktree) =>
+      worktree.projectId === input.projectId && worktree.workspacePath === input.workspacePath,
+  );
+}
+
+export async function materializeWorktreeRecord(input: {
+  readonly api: NativeApi;
+  readonly projectId: ProjectId;
+  readonly workspacePath: string;
+  readonly branch: string | null;
+  readonly isRoot: boolean;
+  readonly branchRenamePending: boolean;
+  readonly worktrees: readonly Worktree[];
+  readonly createdAt?: string;
+}): Promise<{
+  worktreeId: WorktreeId;
+  reusedExistingWorktree: boolean;
+  restoredArchivedWorktree: boolean;
+}> {
+  const existingWorktree = findProjectWorktreeByPath({
+    projectId: input.projectId,
+    workspacePath: input.workspacePath,
+    worktrees: input.worktrees,
+  });
+
+  if (existingWorktree) {
+    if (existingWorktree.archivedAt !== null) {
+      await input.api.orchestration.dispatchCommand({
+        type: "worktree.unarchive",
+        commandId: newCommandId(),
+        worktreeId: existingWorktree.id,
+      });
+    }
+    await input.api.orchestration.dispatchCommand({
+      type: "worktree.meta.update",
+      commandId: newCommandId(),
+      worktreeId: existingWorktree.id,
+      workspacePath: input.workspacePath,
+      branch: input.branch,
+      branchRenamePending: input.branchRenamePending,
+    });
+    return {
+      worktreeId: existingWorktree.id,
+      reusedExistingWorktree: true,
+      restoredArchivedWorktree: existingWorktree.archivedAt !== null,
+    };
+  }
+
+  const worktreeId = newWorktreeId();
+  await input.api.orchestration.dispatchCommand({
+    type: "worktree.create",
+    commandId: newCommandId(),
+    worktreeId,
+    projectId: input.projectId,
+    workspacePath: input.workspacePath,
+    branch: input.branch,
+    isRoot: input.isRoot,
+    branchRenamePending: input.branchRenamePending,
+    createdAt: input.createdAt ?? new Date().toISOString(),
+  });
+  return {
+    worktreeId,
+    reusedExistingWorktree: false,
+    restoredArchivedWorktree: false,
+  };
 }
 
 export function getRootWorktreeId(projectId: ProjectId): WorktreeId {

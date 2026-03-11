@@ -58,6 +58,7 @@ const readModel: OrchestrationReadModel = {
       branchRenamePending: false,
       createdAt: now,
       updatedAt: now,
+      archivedAt: null,
       deletedAt: null,
     },
     {
@@ -69,6 +70,7 @@ const readModel: OrchestrationReadModel = {
       branchRenamePending: false,
       createdAt: now,
       updatedAt: now,
+      archivedAt: null,
       deletedAt: null,
     },
   ],

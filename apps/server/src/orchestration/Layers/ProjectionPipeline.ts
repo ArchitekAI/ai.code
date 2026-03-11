@@ -24,6 +24,7 @@ import {
   ProjectionTurnRepository,
 } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionThreadRepository } from "../../persistence/Services/ProjectionThreads.ts";
+import { WorktreeArchiveMetadataRepository } from "../../persistence/Services/WorktreeArchiveMetadata.ts";
 import { ProjectionWorktreeRepository } from "../../persistence/Services/ProjectionWorktrees.ts";
 import { ProjectionPendingApprovalRepositoryLive } from "../../persistence/Layers/ProjectionPendingApprovals.ts";
 import { ProjectionProjectRepositoryLive } from "../../persistence/Layers/ProjectionProjects.ts";
@@ -34,6 +35,7 @@ import { ProjectionThreadProposedPlanRepositoryLive } from "../../persistence/La
 import { ProjectionThreadSessionRepositoryLive } from "../../persistence/Layers/ProjectionThreadSessions.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { ProjectionThreadRepositoryLive } from "../../persistence/Layers/ProjectionThreads.ts";
+import { WorktreeArchiveMetadataRepositoryLive } from "../../persistence/Layers/WorktreeArchiveMetadata.ts";
 import { ProjectionWorktreeRepositoryLive } from "../../persistence/Layers/ProjectionWorktrees.ts";
 import { ServerConfig } from "../../config.ts";
 import {
@@ -350,6 +352,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const projectionPendingApprovalRepository = yield* ProjectionPendingApprovalRepository;
+  const worktreeArchiveMetadataRepository = yield* WorktreeArchiveMetadataRepository;
 
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -394,6 +397,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
         }
 
         case "project.deleted": {
+          yield* worktreeArchiveMetadataRepository.deleteByProjectId({
+            projectId: event.payload.projectId,
+          });
           const existingRow = yield* projectionProjectRepository.getById({
             projectId: event.payload.projectId,
           });
@@ -426,6 +432,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             branchRenamePending: event.payload.branchRenamePending,
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
+            archivedAt: null,
             deletedAt: null,
           });
           return;
@@ -451,7 +458,40 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           return;
         }
 
+        case "worktree.archived": {
+          const existingRow = yield* projectionWorktreeRepository.getById({
+            worktreeId: event.payload.worktreeId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionWorktreeRepository.upsert({
+            ...existingRow.value,
+            archivedAt: event.payload.archivedAt,
+            updatedAt: event.payload.archivedAt,
+          });
+          return;
+        }
+
+        case "worktree.unarchived": {
+          const existingRow = yield* projectionWorktreeRepository.getById({
+            worktreeId: event.payload.worktreeId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionWorktreeRepository.upsert({
+            ...existingRow.value,
+            archivedAt: null,
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
         case "worktree.deleted": {
+          yield* worktreeArchiveMetadataRepository.deleteById({
+            worktreeId: event.payload.worktreeId,
+          });
           const existingRow = yield* projectionWorktreeRepository.getById({
             worktreeId: event.payload.worktreeId,
           });
@@ -509,6 +549,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                   branchRenamePending: false,
                   createdAt: event.payload.createdAt,
                   updatedAt: event.payload.updatedAt,
+                  archivedAt: null,
                   deletedAt: null,
                 });
               }
@@ -1346,4 +1387,5 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
   Layer.provideMerge(ProjectionTurnRepositoryLive),
   Layer.provideMerge(ProjectionPendingApprovalRepositoryLive),
   Layer.provideMerge(ProjectionStateRepositoryLive),
+  Layer.provideMerge(WorktreeArchiveMetadataRepositoryLive),
 );

@@ -191,6 +191,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           CASE WHEN branch_rename_pending = 0 THEN 0 ELSE 1 END AS "branchRenamePending",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
+          archived_at AS "archivedAt",
           deleted_at AS "deletedAt"
         FROM projection_worktrees
         ORDER BY project_id ASC, is_root DESC, created_at ASC, worktree_id ASC
@@ -572,6 +573,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             branchRenamePending: row.branchRenamePending === 1,
             createdAt: row.createdAt,
             updatedAt: row.updatedAt,
+            archivedAt: row.archivedAt,
             deletedAt: row.deletedAt,
           }));
 

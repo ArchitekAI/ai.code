@@ -198,6 +198,9 @@ class MockTerminalManager implements TerminalManagerShape {
       }
     });
 
+  readonly hasRunningSubprocessForThreads: TerminalManagerShape["hasRunningSubprocessForThreads"] =
+    () => Effect.succeed(false);
+
   readonly subscribe: TerminalManagerShape["subscribe"] = (listener) =>
     Effect.sync(() => {
       this.listeners.add(listener);

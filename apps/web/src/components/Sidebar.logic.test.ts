@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   hasUnseenCompletion,
+  resolveWorktreeDiffStat,
   resolveThreadStatusPill,
   shouldClearThreadSelectionOnMouseDown,
 } from "./Sidebar.logic";
@@ -59,6 +60,36 @@ describe("shouldClearThreadSelectionOnMouseDown", () => {
     } as unknown as HTMLElement;
 
     expect(shouldClearThreadSelectionOnMouseDown(unrelated)).toBe(true);
+  });
+});
+
+describe("resolveWorktreeDiffStat", () => {
+  it("returns null when git status is unavailable", () => {
+    expect(resolveWorktreeDiffStat(null)).toBeNull();
+  });
+
+  it("returns null when both insertions and deletions are zero", () => {
+    expect(
+      resolveWorktreeDiffStat({
+        workingTree: {
+          files: [],
+          insertions: 0,
+          deletions: 0,
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("returns insertions and deletions from the working tree", () => {
+    expect(
+      resolveWorktreeDiffStat({
+        workingTree: {
+          files: [],
+          insertions: 12,
+          deletions: 4,
+        },
+      }),
+    ).toEqual({ additions: 12, deletions: 4 });
   });
 });
 

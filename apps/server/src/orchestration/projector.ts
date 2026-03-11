@@ -15,6 +15,8 @@ import {
   ProjectDeletedPayload,
   ProjectMetaUpdatedPayload,
   WorktreeCreatedPayload,
+  WorktreeArchivedPayload,
+  WorktreeUnarchivedPayload,
   WorktreeDeletedPayload,
   WorktreeMetaUpdatedPayload,
   ThreadActivityAppendedPayload,
@@ -274,6 +276,7 @@ export function projectEvent(
             branchRenamePending: payload.branchRenamePending,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
+            archivedAt: null,
             deletedAt: null,
           },
           event.type,
@@ -300,6 +303,28 @@ export function projectEvent(
             ...(payload.branchRenamePending !== undefined
               ? { branchRenamePending: payload.branchRenamePending }
               : {}),
+            updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
+    case "worktree.archived":
+      return decodeForEvent(WorktreeArchivedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          worktrees: updateWorktree(nextBase.worktrees, payload.worktreeId, {
+            archivedAt: payload.archivedAt,
+            updatedAt: payload.archivedAt,
+          }),
+        })),
+      );
+
+    case "worktree.unarchived":
+      return decodeForEvent(WorktreeUnarchivedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          worktrees: updateWorktree(nextBase.worktrees, payload.worktreeId, {
+            archivedAt: null,
             updatedAt: payload.updatedAt,
           }),
         })),
@@ -361,6 +386,7 @@ export function projectEvent(
                     branchRenamePending: false,
                     createdAt: payload.createdAt,
                     updatedAt: payload.updatedAt,
+                    archivedAt: null,
                     deletedAt: null,
                   },
                 ];

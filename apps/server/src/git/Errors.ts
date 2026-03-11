@@ -58,6 +58,22 @@ export class GitManagerError extends Schema.TaggedErrorClass<GitManagerError>()(
 }
 
 /**
+ * WorktreeArchiveError - Archive/unarchive workflow validation failed.
+ */
+export class WorktreeArchiveError extends Schema.TaggedErrorClass<WorktreeArchiveError>()(
+  "WorktreeArchiveError",
+  {
+    operation: Schema.String,
+    detail: Schema.String,
+    cause: Schema.optional(Schema.Defect),
+  },
+) {
+  override get message(): string {
+    return `Worktree archive failed in ${this.operation}: ${this.detail}`;
+  }
+}
+
+/**
  * GitManagerServiceError - Errors emitted by stacked Git workflow orchestration.
  */
 export type GitManagerServiceError =
@@ -65,3 +81,5 @@ export type GitManagerServiceError =
   | GitCommandError
   | GitHubCliError
   | TextGenerationError;
+
+export type WorktreeArchiveServiceError = WorktreeArchiveError | GitCommandError;

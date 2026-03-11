@@ -222,6 +222,7 @@ function createSnapshotForTargetUser(options: {
         branchRenamePending: false,
         createdAt: NOW_ISO,
         updatedAt: NOW_ISO,
+        archivedAt: null,
         deletedAt: null,
       },
     ],
@@ -561,6 +562,28 @@ async function waitForVisibleComposerEditor(): Promise<HTMLElement> {
         (element) => element.getClientRects().length > 0,
       ) ?? null,
     "Unable to find visible composer editor.",
+  );
+}
+
+async function waitForComposerEditorForThread(threadId: ThreadId): Promise<HTMLElement> {
+  return waitForElement(
+    () =>
+      document
+        .querySelector<HTMLElement>(
+          `[data-chat-composer-form="true"][data-thread-id="${threadId}"]`,
+        )
+        ?.querySelector<HTMLElement>('[contenteditable="true"]') ?? null,
+    `Unable to find composer editor for thread ${threadId}.`,
+  );
+}
+
+async function waitForComposerFormForThread(threadId: ThreadId): Promise<HTMLElement> {
+  return waitForElement(
+    () =>
+      document.querySelector<HTMLElement>(
+        `[data-chat-composer-form="true"][data-thread-id="${threadId}"]`,
+      ),
+    `Unable to find composer form for thread ${threadId}.`,
   );
 }
 
@@ -1256,6 +1279,72 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await vi.waitFor(
         () => {
           expect(document.activeElement).toBe(visibleComposer);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("focuses the composer in the currently focused split pane", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithSecondThread(),
+    });
+
+    try {
+      await mounted.router.navigate({
+        to: "/$threadId",
+        params: { threadId: SECOND_THREAD_ID },
+      });
+      await waitForURL(
+        mounted.router,
+        (path) => path === `/${SECOND_THREAD_ID}`,
+        "Route should update to the second thread.",
+      );
+
+      const api = await waitForDockviewApi();
+      const splitGroup = api.addGroup({ direction: "right" });
+      api.getPanel(SECOND_THREAD_ID)?.api.moveTo({ group: splitGroup });
+
+      await vi.waitFor(
+        () => {
+          expect(api.groups.length).toBe(2);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const firstComposerForm = await waitForComposerFormForThread(THREAD_ID);
+      firstComposerForm.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+        }),
+      );
+
+      await waitForURL(
+        mounted.router,
+        (path) => path === `/${THREAD_ID}`,
+        "Route should follow the interacted split pane.",
+      );
+
+      const firstComposer = await waitForComposerEditorForThread(THREAD_ID);
+      const secondComposer = await waitForComposerEditorForThread(SECOND_THREAD_ID);
+
+      const currentActiveElement = document.activeElement;
+      if (currentActiveElement instanceof HTMLElement) {
+        currentActiveElement.blur();
+      }
+      document.body.tabIndex = -1;
+      document.body.focus();
+      await waitForLayout();
+
+      requestComposerFocus();
+
+      await vi.waitFor(
+        () => {
+          expect(document.activeElement).toBe(firstComposer);
+          expect(document.activeElement).not.toBe(secondComposer);
         },
         { timeout: 8_000, interval: 16 },
       );

@@ -142,6 +142,25 @@ export function requireWorktree(input: {
   );
 }
 
+export function requireActiveWorktree(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly command: OrchestrationCommand;
+  readonly worktreeId: WorktreeId;
+}): Effect.Effect<OrchestrationWorktree, OrchestrationCommandInvariantError> {
+  return requireWorktree(input).pipe(
+    Effect.flatMap((worktree) =>
+      worktree.archivedAt === null
+        ? Effect.succeed(worktree)
+        : Effect.fail(
+            invariantError(
+              input.command.type,
+              `Worktree '${input.worktreeId}' is archived and must be restored before it can be used.`,
+            ),
+          ),
+    ),
+  );
+}
+
 export function requireWorktreeAbsent(input: {
   readonly readModel: OrchestrationReadModel;
   readonly command: OrchestrationCommand;

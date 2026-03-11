@@ -1,3 +1,4 @@
+import type { GitStatusResult } from "@repo/contracts";
 import type { Thread } from "../types";
 import { findLatestProposedPlan, isLatestTurnSettled } from "../session-logic";
 
@@ -14,6 +15,11 @@ export interface ThreadStatusPill {
   colorClass: string;
   dotClass: string;
   pulse: boolean;
+}
+
+export interface WorktreeDiffStat {
+  additions: number;
+  deletions: number;
 }
 
 type ThreadStatusInput = Pick<
@@ -35,6 +41,23 @@ export function hasUnseenCompletion(thread: ThreadStatusInput): boolean {
 export function shouldClearThreadSelectionOnMouseDown(target: HTMLElement | null): boolean {
   if (target === null) return true;
   return !target.closest(THREAD_SELECTION_SAFE_SELECTOR);
+}
+
+export function resolveWorktreeDiffStat(
+  status: Pick<GitStatusResult, "workingTree"> | null | undefined,
+): WorktreeDiffStat | null {
+  if (!status) {
+    return null;
+  }
+
+  if (status.workingTree.insertions === 0 && status.workingTree.deletions === 0) {
+    return null;
+  }
+
+  return {
+    additions: status.workingTree.insertions,
+    deletions: status.workingTree.deletions,
+  };
 }
 
 export function resolveThreadStatusPill(input: {

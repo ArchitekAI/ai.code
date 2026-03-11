@@ -59,10 +59,13 @@ function makeState(thread: Thread): AppState {
         branchRenamePending: false,
         createdAt: "2026-02-13T00:00:00.000Z",
         updatedAt: "2026-02-13T00:00:00.000Z",
+        archivedAt: null,
         deletedAt: null,
       },
     ],
+    archivedWorktrees: [],
     threads: [thread],
+    archivedThreads: [],
     threadsHydrated: true,
   };
 }
@@ -114,6 +117,7 @@ function makeReadModel(thread: OrchestrationReadModel["threads"][number]): Orche
         branchRenamePending: false,
         createdAt: "2026-02-27T00:00:00.000Z",
         updatedAt: "2026-02-27T00:00:00.000Z",
+        archivedAt: null,
         deletedAt: null,
       },
     ],
@@ -209,7 +213,9 @@ describe("store pure functions", () => {
         },
       ],
       worktrees: [],
+      archivedWorktrees: [],
       threads: [],
+      archivedThreads: [],
       threadsHydrated: true,
     };
 
@@ -257,7 +263,9 @@ describe("store read model sync", () => {
         },
       ],
       worktrees: [],
+      archivedWorktrees: [],
       threads: [],
+      archivedThreads: [],
       threadsHydrated: true,
     };
     const readModel: OrchestrationReadModel = {
@@ -287,5 +295,65 @@ describe("store read model sync", () => {
     const next = syncServerReadModel(initialState, readModel);
 
     expect(next.projects.map((project) => project.id)).toEqual([project2, project1, project3]);
+  });
+
+  it("splits active and archived worktrees and threads into separate collections", () => {
+    const archivedWorktreeId = WorktreeId.makeUnsafe("worktree-archived");
+    const archivedThreadId = ThreadId.makeUnsafe("thread-archived");
+    const initialState = makeState(makeThread());
+    const readModel: OrchestrationReadModel = {
+      snapshotSequence: 2,
+      updatedAt: "2026-02-27T00:00:00.000Z",
+      projects: [
+        makeReadModelProject({
+          id: ProjectId.makeUnsafe("project-1"),
+          title: "Project 1",
+          workspaceRoot: "/tmp/project-1",
+        }),
+      ],
+      worktrees: [
+        {
+          id: WORKTREE_ID,
+          projectId: ProjectId.makeUnsafe("project-1"),
+          workspacePath: "/tmp/project-1",
+          branch: "main",
+          isRoot: true,
+          branchRenamePending: false,
+          createdAt: "2026-02-27T00:00:00.000Z",
+          updatedAt: "2026-02-27T00:00:00.000Z",
+          archivedAt: null,
+          deletedAt: null,
+        },
+        {
+          id: archivedWorktreeId,
+          projectId: ProjectId.makeUnsafe("project-1"),
+          workspacePath: "/tmp/project-1-feature",
+          branch: "feature/archive-me",
+          isRoot: false,
+          branchRenamePending: false,
+          createdAt: "2026-02-27T00:00:00.000Z",
+          updatedAt: "2026-02-27T00:00:00.000Z",
+          archivedAt: "2026-02-28T00:00:00.000Z",
+          deletedAt: null,
+        },
+      ],
+      threads: [
+        makeReadModelThread({
+          id: ThreadId.makeUnsafe("thread-active"),
+          worktreeId: WORKTREE_ID,
+        }),
+        makeReadModelThread({
+          id: archivedThreadId,
+          worktreeId: archivedWorktreeId,
+        }),
+      ],
+    };
+
+    const next = syncServerReadModel(initialState, readModel);
+
+    expect(next.worktrees.map((worktree) => worktree.id)).toEqual([WORKTREE_ID]);
+    expect(next.archivedWorktrees.map((worktree) => worktree.id)).toEqual([archivedWorktreeId]);
+    expect(next.threads.map((thread) => thread.id)).toEqual([ThreadId.makeUnsafe("thread-active")]);
+    expect(next.archivedThreads.map((thread) => thread.id)).toEqual([archivedThreadId]);
   });
 });

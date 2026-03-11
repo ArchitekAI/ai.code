@@ -51,7 +51,12 @@ import {
 import { gitBranchesQueryOptions, gitCreateWorktreeMutationOptions } from "~/lib/gitReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
-import { createManagedWorktreeSeed, findRootWorktree, getRootWorktreeId } from "~/lib/worktrees";
+import {
+  createManagedWorktreeSeed,
+  findRootWorktree,
+  getRootWorktreeId,
+  materializeWorktreeRecord,
+} from "~/lib/worktrees";
 
 import { isElectron } from "../env";
 import { COMPOSER_FOCUS_REQUEST_EVENT } from "../composerFocus";
@@ -198,7 +203,7 @@ import {
 } from "~/projectScripts";
 import { Toggle } from "./ui/toggle";
 import { SidebarTrigger } from "./ui/sidebar";
-import { newCommandId, newMessageId, newThreadId, newWorktreeId } from "~/lib/utils";
+import { newCommandId, newMessageId, newThreadId } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import { getAppModelOptions, resolveAppModelSelection, useAppSettings } from "../appSettings";
 import {
@@ -565,6 +570,7 @@ const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
 interface ChatViewProps {
   threadId: ThreadId;
   routeActive?: boolean;
+  focusHotkeyActive?: boolean;
   showHeader?: boolean;
   showTerminalDrawer?: boolean;
   showPlanSidebar?: boolean;
@@ -574,6 +580,7 @@ interface ChatViewProps {
 export default function ChatView({
   threadId,
   routeActive = true,
+  focusHotkeyActive = routeActive,
   showHeader = true,
   showTerminalDrawer = true,
   showPlanSidebar = true,
@@ -582,6 +589,7 @@ export default function ChatView({
   const threads = useStore((store) => store.threads);
   const projects = useStore((store) => store.projects);
   const worktrees = useStore((store) => store.worktrees);
+  const archivedWorktrees = useStore((store) => store.archivedWorktrees);
   const markThreadVisited = useStore((store) => store.markThreadVisited);
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
   const setStoreThreadError = useStore((store) => store.setError);
@@ -594,6 +602,10 @@ export default function ChatView({
   const { resolvedTheme } = useTheme();
   const queryClient = useQueryClient();
   const createWorktreeMutation = useMutation(gitCreateWorktreeMutationOptions({ queryClient }));
+  const allWorktrees = useMemo(
+    () => [...worktrees, ...archivedWorktrees],
+    [archivedWorktrees, worktrees],
+  );
   const composerDraft = useComposerThreadDraft(threadId);
   const prompt = composerDraft.prompt;
   const composerImages = composerDraft.images;
@@ -881,33 +893,15 @@ export default function ChatView({
         return;
       }
 
-      const existingWorktree = worktrees.find(
-        (worktree) =>
-          worktree.workspacePath === input.worktreePath && worktree.projectId === activeProject.id,
-      );
-      const worktreeId = existingWorktree?.id ?? newWorktreeId();
-      if (existingWorktree) {
-        await api.orchestration.dispatchCommand({
-          type: "worktree.meta.update",
-          commandId: newCommandId(),
-          worktreeId,
-          branch: input.branch,
-          workspacePath: input.worktreePath,
-          branchRenamePending: false,
-        });
-      } else {
-        await api.orchestration.dispatchCommand({
-          type: "worktree.create",
-          commandId: newCommandId(),
-          worktreeId,
-          projectId: activeProject.id,
-          workspacePath: input.worktreePath,
-          branch: input.branch,
-          isRoot: false,
-          branchRenamePending: false,
-          createdAt: new Date().toISOString(),
-        });
-      }
+      const { worktreeId } = await materializeWorktreeRecord({
+        api,
+        projectId: activeProject.id,
+        workspacePath: input.worktreePath,
+        branch: input.branch,
+        isRoot: false,
+        branchRenamePending: false,
+        worktrees: allWorktrees,
+      });
       await openOrReuseWorktreeDraftThread({
         projectId: activeProject.id,
         worktreeId,
@@ -916,7 +910,7 @@ export default function ChatView({
         envMode: "worktree",
       });
     },
-    [activeProject, activeRootWorktree, openOrReuseWorktreeDraftThread, worktrees],
+    [activeProject, activeRootWorktree, allWorktrees, openOrReuseWorktreeDraftThread],
   );
 
   useEffect(() => {
@@ -2509,7 +2503,7 @@ export default function ChatView({
   ]);
 
   useEffect(() => {
-    if (!routeActive) {
+    if (!focusHotkeyActive) {
       return;
     }
 
@@ -2519,7 +2513,7 @@ export default function ChatView({
 
     window.addEventListener(COMPOSER_FOCUS_REQUEST_EVENT, handler);
     return () => window.removeEventListener(COMPOSER_FOCUS_REQUEST_EVENT, handler);
-  }, [focusComposer, routeActive]);
+  }, [focusComposer, focusHotkeyActive]);
 
   const addComposerImages = (files: File[]) => {
     if (!activeThreadId || files.length === 0) return;
@@ -2777,7 +2771,7 @@ export default function ChatView({
       if (baseBranchForWorktree) {
         beginSendPhase("preparing-worktree");
         const { slug, branch: newBranch } = createManagedWorktreeSeed({
-          existingWorktrees: worktrees.filter(
+          existingWorktrees: allWorktrees.filter(
             (worktree) => worktree.projectId === activeProject.id,
           ),
           branchPrefix: settings.gitBranchPrefix,
@@ -2788,17 +2782,14 @@ export default function ChatView({
           newBranch,
           managedPathName: slug,
         });
-        const createdWorktreeId = newWorktreeId();
-        await api.orchestration.dispatchCommand({
-          type: "worktree.create",
-          commandId: newCommandId(),
-          worktreeId: createdWorktreeId,
+        const { worktreeId: createdWorktreeId } = await materializeWorktreeRecord({
+          api,
           projectId: activeProject.id,
           workspacePath: result.worktree.path,
           branch: result.worktree.branch,
           isRoot: false,
           branchRenamePending: true,
-          createdAt: new Date().toISOString(),
+          worktrees: allWorktrees,
         });
         nextThreadWorktreeId = createdWorktreeId;
         nextThreadWorktreePath = result.worktree.path;
@@ -3774,6 +3765,7 @@ export default function ChatView({
               onSubmit={onSend}
               className="mx-auto w-full min-w-0 max-w-3xl"
               data-chat-composer-form="true"
+              data-thread-id={activeThread.id}
             >
               <div
                 data-chat-composer-shell="true"

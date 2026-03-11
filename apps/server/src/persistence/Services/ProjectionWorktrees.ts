@@ -13,6 +13,7 @@ export const ProjectionWorktree = Schema.Struct({
   branchRenamePending: Schema.Boolean,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
+  archivedAt: Schema.NullOr(IsoDateTime),
   deletedAt: Schema.NullOr(IsoDateTime),
 });
 export type ProjectionWorktree = typeof ProjectionWorktree.Type;

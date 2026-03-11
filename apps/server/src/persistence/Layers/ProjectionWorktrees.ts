@@ -30,6 +30,7 @@ const toProjectionWorktree = (
   branchRenamePending: row.branchRenamePending === 1,
   createdAt: row.createdAt,
   updatedAt: row.updatedAt,
+  archivedAt: row.archivedAt,
   deletedAt: row.deletedAt,
 });
 
@@ -49,6 +50,7 @@ const makeProjectionWorktreeRepository = Effect.gen(function* () {
           branch_rename_pending,
           created_at,
           updated_at,
+          archived_at,
           deleted_at
         )
         VALUES (
@@ -60,6 +62,7 @@ const makeProjectionWorktreeRepository = Effect.gen(function* () {
           ${row.branchRenamePending ? 1 : 0},
           ${row.createdAt},
           ${row.updatedAt},
+          ${row.archivedAt},
           ${row.deletedAt}
         )
         ON CONFLICT (worktree_id)
@@ -71,6 +74,7 @@ const makeProjectionWorktreeRepository = Effect.gen(function* () {
           branch_rename_pending = excluded.branch_rename_pending,
           created_at = excluded.created_at,
           updated_at = excluded.updated_at,
+          archived_at = excluded.archived_at,
           deleted_at = excluded.deleted_at
       `,
   });
@@ -89,6 +93,7 @@ const makeProjectionWorktreeRepository = Effect.gen(function* () {
           CASE WHEN branch_rename_pending = 0 THEN 0 ELSE 1 END AS "branchRenamePending",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
+          archived_at AS "archivedAt",
           deleted_at AS "deletedAt"
         FROM projection_worktrees
         WHERE worktree_id = ${worktreeId}
@@ -109,6 +114,7 @@ const makeProjectionWorktreeRepository = Effect.gen(function* () {
           CASE WHEN branch_rename_pending = 0 THEN 0 ELSE 1 END AS "branchRenamePending",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
+          archived_at AS "archivedAt",
           deleted_at AS "deletedAt"
         FROM projection_worktrees
         WHERE project_id = ${projectId}
@@ -130,6 +136,7 @@ const makeProjectionWorktreeRepository = Effect.gen(function* () {
           CASE WHEN branch_rename_pending = 0 THEN 0 ELSE 1 END AS "branchRenamePending",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
+          archived_at AS "archivedAt",
           deleted_at AS "deletedAt"
         FROM projection_worktrees
         ORDER BY project_id ASC, is_root DESC, created_at ASC, worktree_id ASC

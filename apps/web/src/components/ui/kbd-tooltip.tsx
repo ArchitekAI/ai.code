@@ -22,8 +22,9 @@ function KbdTooltip({
   sideOffset = 6,
   popupClassName,
 }: KbdTooltipProps) {
-  const shortcutItems =
-    shortcut === undefined ? [] : Array.isArray(shortcut) ? shortcut : [shortcut];
+  const shortcutItems = (
+    shortcut == null ? [] : Array.isArray(shortcut) ? shortcut : [shortcut]
+  ).filter((item) => item != null);
 
   return (
     <Tooltip>

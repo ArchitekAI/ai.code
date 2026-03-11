@@ -46,6 +46,12 @@ it.effect("parses keybinding rules", () =>
       command: "chat.newLocal",
     });
     assert.strictEqual(parsedLocal.command, "chat.newLocal");
+
+    const parsedArchive = yield* decode(KeybindingRule, {
+      key: "mod+shift+a",
+      command: "worktree.archive",
+    });
+    assert.strictEqual(parsedArchive.command, "worktree.archive");
   }),
 );
 

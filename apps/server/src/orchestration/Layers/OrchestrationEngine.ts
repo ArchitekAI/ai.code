@@ -44,6 +44,8 @@ function commandToAggregateRef(command: OrchestrationCommand): {
       };
     case "worktree.create":
     case "worktree.meta.update":
+    case "worktree.archive":
+    case "worktree.unarchive":
     case "worktree.delete":
       return {
         aggregateKind: "worktree",
