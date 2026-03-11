@@ -30,8 +30,11 @@ export const SAFE_IMAGE_FILE_EXTENSIONS = new Set([
 ]);
 
 export function parseBase64DataUrl(
-  dataUrl: string,
+  dataUrl: string | null | undefined,
 ): { readonly mimeType: string; readonly base64: string } | null {
+  if (typeof dataUrl !== "string") {
+    return null;
+  }
   const match = /^data:([^,]+),([a-z0-9+/=\r\n ]+)$/i.exec(dataUrl.trim());
   if (!match) return null;
 

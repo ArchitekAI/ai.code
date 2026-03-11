@@ -32,6 +32,11 @@ describe("imageMime", () => {
     });
   });
 
+  it("rejects missing payload strings without throwing", () => {
+    expect(parseBase64DataUrl(undefined)).toBeNull();
+    expect(parseBase64DataUrl(null)).toBeNull();
+  });
+
   it("does not read inherited keys from mime extension map", () => {
     expect(inferImageExtension({ mimeType: "constructor" })).toBe(".bin");
   });

@@ -131,6 +131,24 @@ const makeWorktreeArchiveService = Effect.gen(function* () {
       Effect.asVoid,
     );
 
+  const resolveVisibleStashCommit = (cwd: string) =>
+    executeGit(
+      "WorktreeArchive.resolveVisibleStashCommit",
+      cwd,
+      ["rev-parse", "--verify", "refs/stash"],
+      {
+        allowNonZeroExit: true,
+      },
+    ).pipe(
+      Effect.map((result) => {
+        if (result.code !== 0) {
+          return null;
+        }
+        const commit = result.stdout.trim();
+        return commit.length > 0 ? commit : null;
+      }),
+    );
+
   const prepareArchiveSnapshot = (input: {
     readonly repoCwd: string;
     readonly worktreePath: string;
@@ -138,33 +156,26 @@ const makeWorktreeArchiveService = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const archiveMessage = `t3code-worktree-archive:${input.worktreeId}`;
-      yield* executeGit(
+      const stashCommitBefore = yield* resolveVisibleStashCommit(input.repoCwd);
+      const stashPushResult = yield* executeGit(
         "WorktreeArchive.stashPush",
         input.worktreePath,
         ["stash", "push", "-u", "-m", archiveMessage],
-        { maxOutputBytes: 4_000_000 },
+        {
+          allowNonZeroExit: true,
+          maxOutputBytes: 4_000_000,
+        },
       );
-
-      const [stashRefResult, stashSubjectResult] = yield* Effect.all([
-        executeGit("WorktreeArchive.resolveStashCommit", input.repoCwd, [
-          "rev-parse",
-          "--verify",
-          "refs/stash",
-        ]),
-        executeGit("WorktreeArchive.resolveStashSubject", input.repoCwd, [
-          "log",
-          "-1",
-          "--format=%gs",
-          "refs/stash",
-        ]),
-      ]);
-      const stashCommit = stashRefResult.stdout.trim();
-      const stashSubject = stashSubjectResult.stdout.trim();
-      if (stashCommit.length === 0 || !stashSubject.includes(archiveMessage)) {
-        return yield* worktreeArchiveError(
-          "archiveWorktree",
-          "Failed to capture the worktree snapshot for archive.",
-        );
+      const stashCommit = yield* resolveVisibleStashCommit(input.repoCwd);
+      if (!stashCommit || stashCommit === stashCommitBefore) {
+        const commandDetail = [stashPushResult.stderr.trim(), stashPushResult.stdout.trim()]
+          .filter((value) => value.length > 0)
+          .join("\n");
+        const detail =
+          commandDetail.length > 0
+            ? `Failed to capture the worktree snapshot for archive.\n${commandDetail}`
+            : "Failed to capture the worktree snapshot for archive. Git did not create a stash snapshot. This usually happens when the reported changes cannot be captured by git stash (for example, dirty submodules).";
+        return yield* worktreeArchiveError("archiveWorktree", detail);
       }
 
       const stashRef = archiveRefForWorktree(input.worktreeId);

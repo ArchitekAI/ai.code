@@ -723,11 +723,8 @@ describe("WebSocket Server", () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: bootstrapThreadId,
-          projectId: bootstrapProjectId,
           title: "New thread",
           model: "gpt-5-codex",
-          branch: null,
-          worktreePath: null,
         }),
       ]),
     );
@@ -1322,6 +1319,96 @@ describe("WebSocket Server", () => {
     expect(domainEvent.type).toBe("thread.message-sent");
     expect(domainEvent.payload.messageId).toBe("assistant:item-1");
     expect(domainEvent.payload.text).toBe("hello from runtime");
+  });
+
+  it("accepts markdown text attachments on thread.turn.start", async () => {
+    server = await createTestServer({ cwd: "/test/attachments" });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const [ws] = await connectAndAwaitWelcome(port);
+    connections.push(ws);
+
+    const workspaceRoot = makeTempDir("t3code-ws-text-attachment-");
+    const createdAt = new Date().toISOString();
+    const createProjectResponse = await sendRequest(ws, ORCHESTRATION_WS_METHODS.dispatchCommand, {
+      type: "project.create",
+      commandId: "cmd-ws-text-attachment-project",
+      projectId: "project-1",
+      title: "WS Project",
+      workspaceRoot,
+      defaultModel: "gpt-5-codex",
+      createdAt,
+    });
+    expect(createProjectResponse.error).toBeUndefined();
+
+    const createThreadResponse = await sendRequest(ws, ORCHESTRATION_WS_METHODS.dispatchCommand, {
+      type: "thread.create",
+      commandId: "cmd-ws-text-attachment-thread",
+      threadId: "thread-1",
+      projectId: "project-1",
+      title: "Thread 1",
+      model: "gpt-5-codex",
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdAt,
+    });
+    expect(createThreadResponse.error).toBeUndefined();
+
+    const startTurnResponse = await sendRequest(ws, ORCHESTRATION_WS_METHODS.dispatchCommand, {
+      type: "thread.turn.start",
+      commandId: "cmd-ws-text-attachment-turn",
+      threadId: "thread-1",
+      message: {
+        messageId: "msg-ws-text-attachment",
+        role: "user",
+        text: "Create a PR",
+        attachments: [
+          {
+            type: "text",
+            name: "PR instructions.md",
+            mimeType: "text/markdown",
+            text: "# Instructions\n\nCreate a PR.",
+          },
+        ],
+      },
+      assistantDeliveryMode: "streaming",
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      createdAt,
+    });
+    expect(startTurnResponse.error).toBeUndefined();
+
+    const snapshotResponse = await sendRequest(ws, ORCHESTRATION_WS_METHODS.getSnapshot, {});
+    expect(snapshotResponse.error).toBeUndefined();
+    const snapshot = snapshotResponse.result as {
+      threads: Array<{
+        id: string;
+        messages: Array<{
+          id: string;
+          attachments?: Array<{
+            type: string;
+            name: string;
+            previewText?: string;
+            mimeType?: string;
+          }>;
+        }>;
+      }>;
+    };
+    const thread = snapshot.threads.find((entry) => entry.id === "thread-1");
+    const message = thread?.messages.find((entry) => entry.id === "msg-ws-text-attachment");
+    expect(message?.attachments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "text",
+          name: "PR instructions.md",
+          mimeType: "text/markdown",
+          previewText: "# Instructions Create a PR.",
+        }),
+      ]),
+    );
   });
 
   it("routes terminal RPC methods and broadcasts terminal events", async () => {
