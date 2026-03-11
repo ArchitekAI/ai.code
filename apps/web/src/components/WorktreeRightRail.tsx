@@ -54,6 +54,7 @@ import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
 import { Input } from "./ui/input";
 import { Skeleton } from "./ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { Textarea } from "./ui/textarea";
 import { toastManager } from "./ui/toast";
 import VscodeEntryIcon from "./VscodeEntryIcon";
@@ -615,58 +616,39 @@ export default function WorktreeRightRail({
         allFilesQuery.isPlaceholderData &&
         allFilesEntries.length === 0));
   const isChangesLoading = activeTab === "changes" && gitStatusQuery.isLoading;
-  const isExplorerLoading = isAllFilesLoading || isChangesLoading;
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-col border-l border-border/70 bg-card/50">
+    <Tabs
+      value={activeTab}
+      onValueChange={(value) => {
+        if (value === "all-files" || value === "changes" || value === "checks") {
+          setRailState({ activeTab: value });
+        }
+      }}
+      className="flex h-full min-h-0 min-w-0 flex-col gap-0 border-l border-border/70 bg-card/50"
+    >
       <div className="flex h-11 shrink-0 items-center justify-between border-b border-border/60 px-2">
-        <div className="flex min-w-0 items-center gap-1">
-          <button
-            type="button"
-            className={cn(
-              "rounded-md px-2 py-1 text-sm transition-colors",
-              activeTab === "all-files"
-                ? "bg-accent text-accent-foreground"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-            onClick={() => setRailState({ activeTab: "all-files" })}
-          >
+        <TabsList aria-label="Right rail sections" className="min-w-0 gap-1 bg-transparent p-0">
+          <TabsTrigger value="all-files" className="h-auto flex-none px-2 py-1 text-sm">
             All files
-          </button>
-          <button
-            type="button"
-            className={cn(
-              "rounded-md px-2 py-1 text-sm transition-colors",
-              activeTab === "changes"
-                ? "bg-accent text-accent-foreground"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-            onClick={() => setRailState({ activeTab: "changes" })}
-          >
+          </TabsTrigger>
+          <TabsTrigger value="changes" className="h-auto flex-none px-2 py-1 text-sm">
             Changes {changesEntries.length > 0 ? changesEntries.length : ""}
-          </button>
-          <button
-            type="button"
-            className={cn(
-              "rounded-md px-2 py-1 text-sm transition-colors",
-              activeTab === "checks"
-                ? "bg-accent text-accent-foreground"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-            onClick={() => setRailState({ activeTab: "checks" })}
-          >
+          </TabsTrigger>
+          <TabsTrigger value="checks" className="h-auto flex-none px-2 py-1 text-sm">
             Checks
-          </button>
-        </div>
+          </TabsTrigger>
+        </TabsList>
         <div className="flex items-center gap-0.5">
           {activeTab !== "checks" ? (
             <Fragment>
-              <button
-                type="button"
+              <Button
                 aria-label="Tree view"
                 title="Tree view"
+                size="icon-xs"
+                variant="ghost"
                 className={cn(
-                  "inline-flex size-5 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:text-foreground",
+                  "size-5 rounded-sm text-muted-foreground hover:text-foreground",
                   activeExplorerViewMode === "tree"
                     ? "bg-accent text-foreground"
                     : "bg-transparent",
@@ -680,13 +662,14 @@ export default function WorktreeRightRail({
                 }}
               >
                 <FolderTreeIcon className="size-3" />
-              </button>
-              <button
-                type="button"
+              </Button>
+              <Button
                 aria-label="List view"
                 title="List view"
+                size="icon-xs"
+                variant="ghost"
                 className={cn(
-                  "inline-flex size-5 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:text-foreground",
+                  "size-5 rounded-sm text-muted-foreground hover:text-foreground",
                   activeExplorerViewMode === "list"
                     ? "bg-accent text-foreground"
                     : "bg-transparent",
@@ -700,7 +683,7 @@ export default function WorktreeRightRail({
                 }}
               >
                 <ListTreeIcon className="size-3" />
-              </button>
+              </Button>
             </Fragment>
           ) : null}
           <Button size="icon-xs" variant="ghost" aria-label="Close right rail" onClick={onClose}>
@@ -709,55 +692,56 @@ export default function WorktreeRightRail({
         </div>
       </div>
 
-      {activeTab !== "checks" ? (
-        <Fragment>
-          {isExplorerLoading ? (
-            <ExplorerLoadingState
-              description={
-                activeTab === "all-files" ? "Loading workspace files…" : "Loading changes…"
-              }
-            />
-          ) : activeTab === "all-files" ? (
-            allFilesRows.length > 0 ? (
-              <ExplorerList
-                key={explorerListKey}
-                rows={allFilesRows}
-                theme={theme}
-                viewMode={railState.allFilesViewMode}
-                onToggleDirectory={(path) => onToggleDirectory("all-files", path)}
-              />
-            ) : (
-              <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-muted-foreground">
-                No indexed files.
-              </div>
-            )
-          ) : changesRows.length > 0 ? (
-            <ExplorerList
-              key={explorerListKey}
-              rows={changesRows}
-              theme={theme}
-              viewMode={railState.changesViewMode}
-              onToggleDirectory={(path) => onToggleDirectory("changes", path)}
-            />
-          ) : (
-            <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-muted-foreground">
-              Working tree is clean.
-            </div>
-          )}
-          {(activeTab === "all-files" ? allFilesQuery.data?.truncated : false) ? (
-            <div className="border-t border-border/50 px-3 py-2 text-xs text-muted-foreground">
-              Results truncated to the indexed workspace limit.
-            </div>
-          ) : null}
-        </Fragment>
-      ) : (
+      <TabsContent value="all-files" className="min-h-0 flex-1 flex-col">
+        {isAllFilesLoading ? (
+          <ExplorerLoadingState description="Loading workspace files…" />
+        ) : allFilesRows.length > 0 ? (
+          <ExplorerList
+            key={explorerListKey}
+            rows={allFilesRows}
+            theme={theme}
+            viewMode={railState.allFilesViewMode}
+            onToggleDirectory={(path) => onToggleDirectory("all-files", path)}
+          />
+        ) : (
+          <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-muted-foreground">
+            No indexed files.
+          </div>
+        )}
+        {allFilesQuery.data?.truncated ? (
+          <div className="border-t border-border/50 px-3 py-2 text-xs text-muted-foreground">
+            Results truncated to the indexed workspace limit.
+          </div>
+        ) : null}
+      </TabsContent>
+
+      <TabsContent value="changes" className="min-h-0 flex-1 flex-col">
+        {isChangesLoading ? (
+          <ExplorerLoadingState description="Loading changes…" />
+        ) : changesRows.length > 0 ? (
+          <ExplorerList
+            key={explorerListKey}
+            rows={changesRows}
+            theme={theme}
+            viewMode={railState.changesViewMode}
+            onToggleDirectory={(path) => onToggleDirectory("changes", path)}
+          />
+        ) : (
+          <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-muted-foreground">
+            Working tree is clean.
+          </div>
+        )}
+      </TabsContent>
+
+      <TabsContent value="checks" className="min-h-0 flex-1">
         <div className="min-h-0 flex-1 overflow-auto px-3 py-3">
           {checksQuery.isLoading ? (
             <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
               <LoaderIcon className="mr-2 size-4 animate-spin" />
               Loading checks…
             </div>
-          ) : (
+          ) : null}
+          {!checksQuery.isLoading ? (
             <div className="space-y-5">
               {currentPullRequest ? (
                 <div className="space-y-2">
@@ -1096,9 +1080,9 @@ export default function WorktreeRightRail({
                 </section>
               ) : null}
             </div>
-          )}
+          ) : null}
         </div>
-      )}
-    </div>
+      </TabsContent>
+    </Tabs>
   );
 }
