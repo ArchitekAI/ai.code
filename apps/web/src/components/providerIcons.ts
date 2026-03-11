@@ -4,6 +4,7 @@ import { ClaudeAI, CursorIcon, type Icon, OpenAI } from "./Icons";
 
 export const PROVIDER_ICON_BY_PROVIDER: Record<ProviderKind, Icon> = {
   codex: OpenAI,
+  claudeCode: ClaudeAI,
 };
 
 export const PROVIDER_ICON_BY_PROVIDER_PICKER: Record<ProviderPickerKind, Icon> = {

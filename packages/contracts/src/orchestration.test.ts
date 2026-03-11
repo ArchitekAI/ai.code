@@ -159,6 +159,40 @@ it.effect("preserves explicit provider and runtime mode in thread.turn.start", (
   }),
 );
 
+it.effect("accepts Claude Code as an explicit provider in thread.turn.start", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeThreadTurnStartCommand({
+      type: "thread.turn.start",
+      commandId: "cmd-turn-claude",
+      threadId: "thread-claude",
+      message: {
+        messageId: "msg-claude",
+        role: "user",
+        text: "hello",
+        attachments: [],
+      },
+      provider: "claudeCode",
+      model: "claude-sonnet-4-6",
+      providerOptions: {
+        claudeCode: {
+          env: {
+            CLAUDE_CODE_USE_BEDROCK: "1",
+            AWS_REGION: "us-east-1",
+          },
+        },
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.strictEqual(parsed.provider, "claudeCode");
+    assert.strictEqual(parsed.model, "claude-sonnet-4-6");
+    assert.deepStrictEqual(parsed.providerOptions?.claudeCode?.env, {
+      CLAUDE_CODE_USE_BEDROCK: "1",
+      AWS_REGION: "us-east-1",
+    });
+  }),
+);
+
 it.effect("decodes thread.created runtime mode for historical events", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeThreadCreatedPayload({

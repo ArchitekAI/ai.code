@@ -176,6 +176,7 @@ function makeFakeCodexAdapter(provider: ProviderKind = "codex") {
     provider,
     capabilities: {
       sessionModelSwitch: "in-session",
+      conversationRollback: "supported",
     },
     startSession,
     sendTurn,

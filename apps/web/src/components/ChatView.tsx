@@ -207,7 +207,15 @@ import { Toggle } from "./ui/toggle";
 import { SidebarTrigger } from "./ui/sidebar";
 import { newCommandId, newMessageId, newThreadId } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
-import { getAppModelOptions, resolveAppModelSelection, useAppSettings } from "../appSettings";
+import {
+  getAppModelOptions,
+  getCustomModelsForProvider,
+  isClaudeBedrockEnabled,
+  parseEnvironmentVariablesText,
+  resolveAppModelSelection,
+  useAppSettings,
+} from "../appSettings";
+import { inferProviderForModel } from "../providerModels";
 import {
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
@@ -943,15 +951,25 @@ export default function ChatView({
       activeThread.messages.length > 0 ||
       activeThread.session !== null),
   );
+  const activeThreadProvider = activeThread
+    ? inferProviderForModel({
+        model: activeThread.model,
+        sessionProviderName: activeThread.session?.provider ?? null,
+        customModelsByProvider: {
+          codex: getCustomModelsForProvider(settings, "codex"),
+          claudeCode: getCustomModelsForProvider(settings, "claudeCode"),
+        },
+      })
+    : null;
   const lockedProvider: ProviderKind | null = hasThreadStarted
-    ? (sessionProvider ?? selectedProviderByThreadId ?? null)
+    ? (sessionProvider ?? activeThreadProvider ?? selectedProviderByThreadId ?? null)
     : null;
   const selectedProvider: ProviderKind = lockedProvider ?? selectedProviderByThreadId ?? "codex";
   const baseThreadModel = resolveModelSlugForProvider(
     selectedProvider,
     activeThread?.model ?? activeProject?.model ?? getDefaultModel(selectedProvider),
   );
-  const customModelsForSelectedProvider = settings.customCodexModels;
+  const customModelsForSelectedProvider = getCustomModelsForProvider(settings, selectedProvider);
   const selectedModel = useMemo(() => {
     const draftModel = composerDraft.model;
     if (!draftModel) {
@@ -979,16 +997,39 @@ export default function ChatView({
     return Object.keys(codexOptions).length > 0 ? { codex: codexOptions } : undefined;
   }, [selectedCodexFastModeEnabled, selectedEffort, selectedProvider, supportsReasoningEffort]);
   const providerOptionsForDispatch = useMemo(() => {
-    if (!settings.codexBinaryPath && !settings.codexHomePath) {
+    const claudeEnvironment = parseEnvironmentVariablesText(settings.claudeEnvVars).env;
+    if (
+      !settings.codexBinaryPath &&
+      !settings.codexHomePath &&
+      !settings.claudeBinaryPath &&
+      Object.keys(claudeEnvironment).length === 0
+    ) {
       return undefined;
     }
     return {
-      codex: {
-        ...(settings.codexBinaryPath ? { binaryPath: settings.codexBinaryPath } : {}),
-        ...(settings.codexHomePath ? { homePath: settings.codexHomePath } : {}),
-      },
+      ...(settings.codexBinaryPath || settings.codexHomePath
+        ? {
+            codex: {
+              ...(settings.codexBinaryPath ? { binaryPath: settings.codexBinaryPath } : {}),
+              ...(settings.codexHomePath ? { homePath: settings.codexHomePath } : {}),
+            },
+          }
+        : {}),
+      ...(settings.claudeBinaryPath || Object.keys(claudeEnvironment).length > 0
+        ? {
+            claudeCode: {
+              ...(settings.claudeBinaryPath ? { binaryPath: settings.claudeBinaryPath } : {}),
+              ...(Object.keys(claudeEnvironment).length > 0 ? { env: claudeEnvironment } : {}),
+            },
+          }
+        : {}),
     };
-  }, [settings.codexBinaryPath, settings.codexHomePath]);
+  }, [
+    settings.claudeBinaryPath,
+    settings.claudeEnvVars,
+    settings.codexBinaryPath,
+    settings.codexHomePath,
+  ]);
   const selectedModelForPicker = selectedModel;
   const modelOptionsByProvider = useMemo(
     () => getCustomModelOptionsByProvider(settings),
@@ -3363,7 +3404,7 @@ export default function ChatView({
       setComposerDraftProvider(activeThread.id, provider);
       setComposerDraftModel(
         activeThread.id,
-        resolveAppModelSelection(provider, settings.customCodexModels, model),
+        resolveAppModelSelection(provider, getCustomModelsForProvider(settings, provider), model),
       );
       scheduleComposerFocus();
     },
@@ -3373,7 +3414,7 @@ export default function ChatView({
       scheduleComposerFocus,
       setComposerDraftModel,
       setComposerDraftProvider,
-      settings.customCodexModels,
+      settings,
     ],
   );
   const onEffortSelect = useCallback(
@@ -3711,7 +3752,10 @@ export default function ChatView({
       ) : null}
 
       {/* Error banner */}
-      <ProviderHealthBanner status={activeProviderStatus} />
+      <ProviderHealthBanner
+        status={activeProviderStatus}
+        claudeBedrockEnabled={isClaudeBedrockEnabled(settings.claudeEnvVars)}
+      />
       <ThreadErrorBanner
         error={activeThread.error}
         onDismiss={() => setThreadError(activeThread.id, null)}
@@ -3750,6 +3794,7 @@ export default function ChatView({
               expandedWorkGroups={expandedWorkGroups}
               onToggleWorkGroup={onToggleWorkGroup}
               onOpenTurnDiff={onOpenTurnDiff}
+              checkpointRevertSupported={activeThreadProvider !== "claudeCode"}
               revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
               onRevertUserMessage={onRevertUserMessage}
               isRevertingCheckpoint={isRevertingCheckpoint}
@@ -4568,27 +4613,37 @@ const ThreadErrorBanner = memo(function ThreadErrorBanner({
 
 const ProviderHealthBanner = memo(function ProviderHealthBanner({
   status,
+  claudeBedrockEnabled,
 }: {
   status: ServerProviderStatus | null;
+  claudeBedrockEnabled: boolean;
 }) {
   if (!status || status.status === "ready") {
     return null;
   }
 
+  const bedrockAuthMismatch =
+    claudeBedrockEnabled &&
+    status.provider === "claudeCode" &&
+    status.available &&
+    status.authStatus === "unauthenticated";
   const defaultMessage =
     status.status === "error"
       ? `${status.provider} provider is unavailable.`
       : `${status.provider} provider has limited availability.`;
+  const resolvedMessage = bedrockAuthMismatch
+    ? "Claude Code is configured to use Bedrock env vars for new sessions. The startup health check still probes `claude auth status`, so this auth warning can be ignored if your AWS credentials and region variables are set correctly."
+    : (status.message ?? defaultMessage);
 
   return (
     <div className="pt-3 mx-auto max-w-3xl">
-      <Alert variant={status.status === "error" ? "error" : "warning"}>
+      <Alert variant={status.status === "error" && !bedrockAuthMismatch ? "error" : "warning"}>
         <CircleAlertIcon />
         <AlertTitle>
           {status.provider === "codex" ? "Codex provider status" : `${status.provider} status`}
         </AlertTitle>
-        <AlertDescription className="line-clamp-3" title={status.message ?? defaultMessage}>
-          {status.message ?? defaultMessage}
+        <AlertDescription className="line-clamp-3" title={resolvedMessage}>
+          {resolvedMessage}
         </AlertDescription>
       </Alert>
     </div>
@@ -5232,6 +5287,7 @@ interface MessagesTimelineProps {
   expandedWorkGroups: Record<string, boolean>;
   onToggleWorkGroup: (groupId: string) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
+  checkpointRevertSupported: boolean;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   onRevertUserMessage: (messageId: MessageId) => void;
   isRevertingCheckpoint: boolean;
@@ -5286,6 +5342,7 @@ const MessagesTimeline = memo(function MessagesTimeline({
   expandedWorkGroups,
   onToggleWorkGroup,
   onOpenTurnDiff,
+  checkpointRevertSupported,
   revertTurnCountByUserMessageId,
   onRevertUserMessage,
   isRevertingCheckpoint,
@@ -5597,7 +5654,8 @@ const MessagesTimeline = memo(function MessagesTimeline({
               { type: "image" }
             > => attachment.type === "image",
           );
-          const canRevertAgentWork = revertTurnCountByUserMessageId.has(row.message.id);
+          const canRevertAgentWork =
+            checkpointRevertSupported && revertTurnCountByUserMessageId.has(row.message.id);
           return (
             <div className="flex justify-end">
               <div className="group relative max-w-[80%] rounded-2xl rounded-br-sm border border-border bg-secondary px-4 py-3">
@@ -5867,7 +5925,7 @@ function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): o
   label: string;
   available: true;
 } {
-  return option.available && option.value !== "claudeCode";
+  return option.available && option.value !== "cursor";
 }
 
 const AVAILABLE_PROVIDER_OPTIONS = PROVIDER_OPTIONS.filter(isAvailableProviderOption);
@@ -5879,9 +5937,11 @@ const COMING_SOON_PROVIDER_OPTIONS = [
 
 function getCustomModelOptionsByProvider(settings: {
   customCodexModels: readonly string[];
+  customClaudeModels: readonly string[];
 }): Record<ProviderKind, ReadonlyArray<{ slug: string; name: string }>> {
   return {
     codex: getAppModelOptions("codex", settings.customCodexModels),
+    claudeCode: getAppModelOptions("claudeCode", settings.customClaudeModels),
   };
 }
 

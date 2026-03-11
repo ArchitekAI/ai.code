@@ -1553,6 +1553,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       provider: PROVIDER,
       capabilities: {
         sessionModelSwitch: "in-session",
+        conversationRollback: "supported",
       },
       startSession,
       sendTurn,

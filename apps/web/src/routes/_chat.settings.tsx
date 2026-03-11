@@ -8,9 +8,13 @@ import { getModelOptions, normalizeModelSlug } from "@repo/shared/model";
 
 import {
   MAX_PROMPT_HOTKEY_MESSAGE_LENGTH,
+  MAX_CLAUDE_ENV_VARS_LENGTH,
   MAX_CUSTOM_APP_NAME_LENGTH,
   MAX_CUSTOM_MODEL_LENGTH,
+  getCustomModelsForProvider,
+  parseEnvironmentVariablesText,
   normalizePromptHotkeyMessage,
+  patchCustomModels,
   useAppSettings,
 } from "../appSettings";
 import { isElectron } from "../env";
@@ -58,37 +62,14 @@ const MODEL_PROVIDER_SETTINGS: Array<{
     placeholder: "your-codex-model-slug",
     example: "gpt-6.7-codex-ultra-preview",
   },
+  {
+    provider: "claudeCode",
+    title: "Claude Code",
+    description: "Save additional Claude model slugs for the picker and `/model` command.",
+    placeholder: "your-claude-model-slug",
+    example: "claude-opus-4-6",
+  },
 ] as const;
-
-function getCustomModelsForProvider(
-  settings: ReturnType<typeof useAppSettings>["settings"],
-  provider: ProviderKind,
-) {
-  switch (provider) {
-    case "codex":
-    default:
-      return settings.customCodexModels;
-  }
-}
-
-function getDefaultCustomModelsForProvider(
-  defaults: ReturnType<typeof useAppSettings>["defaults"],
-  provider: ProviderKind,
-) {
-  switch (provider) {
-    case "codex":
-    default:
-      return defaults.customCodexModels;
-  }
-}
-
-function patchCustomModels(provider: ProviderKind, models: string[]) {
-  switch (provider) {
-    case "codex":
-    default:
-      return { customCodexModels: models };
-  }
-}
 
 function SettingsRouteView() {
   const { theme, setTheme, resolvedTheme } = useTheme();
@@ -100,6 +81,7 @@ function SettingsRouteView() {
     Record<ProviderKind, string>
   >({
     codex: "",
+    claudeCode: "",
   });
   const [customModelErrorByProvider, setCustomModelErrorByProvider] = useState<
     Partial<Record<ProviderKind, string | null>>
@@ -113,6 +95,12 @@ function SettingsRouteView() {
 
   const codexBinaryPath = settings.codexBinaryPath;
   const codexHomePath = settings.codexHomePath;
+  const claudeBinaryPath = settings.claudeBinaryPath;
+  const claudeEnvVars = settings.claudeEnvVars;
+  const parsedClaudeEnvVars = useMemo(
+    () => parseEnvironmentVariablesText(claudeEnvVars),
+    [claudeEnvVars],
+  );
   const effectiveAppDisplayName = getAppDisplayName(customAppNameInput);
   const keybindingsConfigPath = serverConfigQuery.data?.keybindingsConfigPath ?? null;
   const normalizedGitBranchPrefixPreview = useMemo(
@@ -500,6 +488,90 @@ function SettingsRouteView() {
 
             <section className="rounded-2xl border border-border bg-card p-5">
               <div className="mb-4">
+                <h2 className="text-sm font-medium text-foreground">Claude Code CLI</h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  This override applies to new Claude sessions and lets you use a non-default Claude
+                  install.
+                </p>
+              </div>
+
+              <div className="space-y-4">
+                <label htmlFor="claude-binary-path" className="block space-y-1">
+                  <span className="text-xs font-medium text-foreground">Claude binary path</span>
+                  <Input
+                    id="claude-binary-path"
+                    value={claudeBinaryPath}
+                    onChange={(event) => updateSettings({ claudeBinaryPath: event.target.value })}
+                    placeholder="claude"
+                    spellCheck={false}
+                  />
+                  <span className="text-xs text-muted-foreground">
+                    Leave blank to use <code>claude</code> from your PATH.
+                  </span>
+                </label>
+
+                <label htmlFor="claude-env-vars" className="block space-y-1">
+                  <span className="text-xs font-medium text-foreground">Claude environment</span>
+                  <Textarea
+                    id="claude-env-vars"
+                    value={claudeEnvVars}
+                    onChange={(event) => updateSettings({ claudeEnvVars: event.target.value })}
+                    placeholder={[
+                      "CLAUDE_CODE_USE_BEDROCK=1",
+                      "AWS_REGION=us-east-1",
+                      "AWS_PROFILE=bedrock",
+                    ].join("\n")}
+                    spellCheck={false}
+                    rows={6}
+                    className="font-mono text-xs"
+                  />
+                  <span className="text-xs text-muted-foreground">
+                    Enter one <code>KEY=VALUE</code> pair per line. These vars are applied to new
+                    Claude sessions, which is useful for Bedrock-backed Claude Code setups.
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    Example: <code>CLAUDE_CODE_USE_BEDROCK=1</code>,{" "}
+                    <code>AWS_REGION=us-east-1</code>, <code>AWS_PROFILE=bedrock</code>.
+                  </span>
+                  {parsedClaudeEnvVars.invalidLineNumbers.length > 0 && (
+                    <span className="text-xs text-amber-600">
+                      Ignoring invalid env lines:{" "}
+                      {parsedClaudeEnvVars.invalidLineNumbers.join(", ")}.
+                    </span>
+                  )}
+                  <span className="text-xs text-muted-foreground">
+                    Parsed {Object.keys(parsedClaudeEnvVars.env).length} variable
+                    {Object.keys(parsedClaudeEnvVars.env).length === 1 ? "" : "s"}. Maximum{" "}
+                    {MAX_CLAUDE_ENV_VARS_LENGTH.toLocaleString()} characters total.
+                  </span>
+                </label>
+
+                <div className="flex flex-col gap-3 text-xs text-muted-foreground sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0 flex-1">
+                    <p>Binary source</p>
+                    <p className="mt-1 break-all font-mono text-[11px] text-foreground">
+                      {claudeBinaryPath || "PATH"}
+                    </p>
+                  </div>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    className="self-start"
+                    onClick={() =>
+                      updateSettings({
+                        claudeBinaryPath: defaults.claudeBinaryPath,
+                        claudeEnvVars: defaults.claudeEnvVars,
+                      })
+                    }
+                  >
+                    Reset Claude overrides
+                  </Button>
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-border bg-card p-5">
+              <div className="mb-4">
                 <h2 className="text-sm font-medium text-foreground">Models</h2>
                 <p className="mt-1 text-xs text-muted-foreground">
                   Save additional provider model slugs so they appear in the chat model picker and
@@ -588,7 +660,7 @@ function SettingsRouteView() {
                                 onClick={() =>
                                   updateSettings(
                                     patchCustomModels(provider, [
-                                      ...getDefaultCustomModelsForProvider(defaults, provider),
+                                      ...getCustomModelsForProvider(defaults, provider),
                                     ]),
                                   )
                                 }

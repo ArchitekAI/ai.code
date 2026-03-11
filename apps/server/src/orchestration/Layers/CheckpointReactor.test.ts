@@ -37,6 +37,7 @@ import {
 } from "../../provider/Services/ProviderService.ts";
 import { checkpointRefForThreadTurn } from "../../checkpointing/Utils.ts";
 import { ServerConfig } from "../../config.ts";
+import { deriveWorktreeIdFromLegacyThread, rootWorktreeIdForProject } from "../worktrees.ts";
 
 const asProjectId = (value: string): ProjectId => ProjectId.makeUnsafe(value);
 const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
@@ -59,6 +60,10 @@ function createProviderServiceHarness(
   hasSession = true,
   sessionCwd = cwd,
   providerName: ProviderSession["provider"] = "codex",
+  capabilities: {
+    readonly sessionModelSwitch: "in-session" | "restart-session";
+    readonly conversationRollback: "supported" | "unsupported";
+  } = { sessionModelSwitch: "in-session", conversationRollback: "supported" },
 ) {
   const now = new Date().toISOString();
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
@@ -90,7 +95,7 @@ function createProviderServiceHarness(
     respondToUserInput: () => unsupported(),
     stopSession: () => unsupported(),
     listSessions,
-    getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
+    getCapabilities: () => Effect.succeed(capabilities),
     rollbackConversation,
     streamEvents: Stream.fromPubSub(runtimeEventPubSub),
   };
@@ -111,7 +116,7 @@ async function waitForThread(
   predicate: (thread: {
     latestTurn: { turnId: string } | null;
     checkpoints: ReadonlyArray<{ checkpointTurnCount: number }>;
-    activities: ReadonlyArray<{ kind: string }>;
+    activities: ReadonlyArray<{ kind: string; payload?: unknown }>;
   }) => boolean,
   timeoutMs = 5000,
 ) {
@@ -119,7 +124,7 @@ async function waitForThread(
   const poll = async (): Promise<{
     latestTurn: { turnId: string } | null;
     checkpoints: ReadonlyArray<{ checkpointTurnCount: number }>;
-    activities: ReadonlyArray<{ kind: string }>;
+    activities: ReadonlyArray<{ kind: string; payload?: unknown }>;
   }> => {
     const readModel = await Effect.runPromise(engine.getReadModel());
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
@@ -235,14 +240,33 @@ describe("CheckpointReactor", () => {
     readonly projectWorkspaceRoot?: string;
     readonly threadWorktreePath?: string | null;
     readonly providerSessionCwd?: string;
+    readonly providerName?: ProviderSession["provider"];
+    readonly providerCapabilities?: {
+      readonly sessionModelSwitch: "in-session" | "restart-session";
+      readonly conversationRollback: "supported" | "unsupported";
+    };
   }) {
     const cwd = createGitRepository();
     tempDirs.push(cwd);
+    const projectId = asProjectId("project-1");
+    const projectWorkspaceRoot = options?.projectWorkspaceRoot ?? cwd;
+    const threadWorktreePath =
+      options?.threadWorktreePath === undefined ? cwd : options.threadWorktreePath;
+    const usesRootWorktree =
+      threadWorktreePath === null || threadWorktreePath === projectWorkspaceRoot;
+    const worktreeId = usesRootWorktree
+      ? rootWorktreeIdForProject(projectId)
+      : deriveWorktreeIdFromLegacyThread({
+          projectId,
+          worktreePath: threadWorktreePath,
+        });
+    const worktreeWorkspacePath = threadWorktreePath ?? projectWorkspaceRoot;
     const provider = createProviderServiceHarness(
       cwd,
       options?.hasSession ?? true,
       options?.providerSessionCwd ?? cwd,
-      "codex",
+      options?.providerName ?? "codex",
+      options?.providerCapabilities,
     );
     const orchestrationLayer = OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionPipelineLive),
@@ -273,25 +297,41 @@ describe("CheckpointReactor", () => {
       engine.dispatch({
         type: "project.create",
         commandId: CommandId.makeUnsafe("cmd-project-create"),
-        projectId: asProjectId("project-1"),
+        projectId,
         title: "Test Project",
-        workspaceRoot: options?.projectWorkspaceRoot ?? cwd,
+        workspaceRoot: projectWorkspaceRoot,
         defaultModel: "gpt-5-codex",
         createdAt,
       }),
     );
+    if (!usesRootWorktree) {
+      await Effect.runPromise(
+        engine.dispatch({
+          type: "worktree.create",
+          commandId: CommandId.makeUnsafe("cmd-worktree-create"),
+          worktreeId,
+          projectId,
+          workspacePath: worktreeWorkspacePath,
+          branch: null,
+          isRoot: false,
+          branchRenamePending: false,
+          createdAt,
+        }),
+      );
+    }
     await Effect.runPromise(
       engine.dispatch({
         type: "thread.create",
         commandId: CommandId.makeUnsafe("cmd-thread-create"),
         threadId: ThreadId.makeUnsafe("thread-1"),
-        projectId: asProjectId("project-1"),
+        projectId,
+        worktreeId,
         title: "Thread",
         model: "gpt-5-codex",
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         branch: null,
-        worktreePath: options?.threadWorktreePath ?? cwd,
+        worktreePath: usesRootWorktree ? null : threadWorktreePath,
         createdAt,
       }),
     );
@@ -908,5 +948,101 @@ describe("CheckpointReactor", () => {
       true,
     );
     expect(harness.provider.rollbackConversation).not.toHaveBeenCalled();
+  });
+
+  it("rejects Claude checkpoint revert before restoring the filesystem", async () => {
+    const harness = await createHarness({
+      providerName: "claudeCode",
+      providerCapabilities: {
+        sessionModelSwitch: "restart-session",
+        conversationRollback: "unsupported",
+      },
+    });
+    const createdAt = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-set-claude-revert"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "ready",
+          providerName: "claudeCode",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.diff.complete",
+        commandId: CommandId.makeUnsafe("cmd-claude-diff-1"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        turnId: asTurnId("turn-1"),
+        completedAt: createdAt,
+        checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 1),
+        status: "ready",
+        files: [],
+        checkpointTurnCount: 1,
+        createdAt,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.diff.complete",
+        commandId: CommandId.makeUnsafe("cmd-claude-diff-2"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        turnId: asTurnId("turn-2"),
+        completedAt: createdAt,
+        checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 2),
+        status: "ready",
+        files: [],
+        checkpointTurnCount: 2,
+        createdAt,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.checkpoint.revert",
+        commandId: CommandId.makeUnsafe("cmd-claude-revert-request"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        turnCount: 1,
+        createdAt,
+      }),
+    );
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some((activity) => activity.kind === "checkpoint.revert.failed"),
+    );
+
+    expect(thread.latestTurn?.turnId).toBe("turn-2");
+    expect(thread.activities.some((activity) => activity.kind === "checkpoint.revert.failed")).toBe(
+      true,
+    );
+    expect(
+      thread.activities.some((activity) => {
+        if (activity.kind !== "checkpoint.revert.failed") {
+          return false;
+        }
+        const payload =
+          activity.payload && typeof activity.payload === "object"
+            ? (activity.payload as { detail?: unknown })
+            : null;
+        return (
+          typeof payload?.detail === "string" && payload.detail.includes("provider 'claudeCode'")
+        );
+      }),
+    ).toBe(true);
+    expect(harness.provider.rollbackConversation).not.toHaveBeenCalled();
+    expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe("v3\n");
+    expect(
+      gitRefExists(harness.cwd, checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 2)),
+    ).toBe(true);
   });
 });

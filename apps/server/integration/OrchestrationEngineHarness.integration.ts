@@ -265,7 +265,7 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(NodeServices.layer),
       Layer.provideMerge(providerSessionDirectoryLayer),
     );
-    const providerLayer = useRealCodex
+    const providerServiceLayer = useRealCodex
       ? makeProviderServiceLive().pipe(
           Layer.provide(providerSessionDirectoryLayer),
           Layer.provide(realCodexRegistry),
@@ -276,6 +276,7 @@ export const makeOrchestrationIntegrationHarness = (
           Layer.provide(fakeRegistry!),
           Layer.provide(AnalyticsService.layerTest),
         );
+    const providerLayer = Layer.merge(providerServiceLayer, providerSessionDirectoryLayer);
 
     const runtimeServicesLayer = Layer.mergeAll(
       orchestrationLayer,

@@ -13,6 +13,7 @@ import {
   type TurnId,
 } from "@repo/contracts";
 import { Cache, Cause, Duration, Effect, Layer, Option, Schema, Stream } from "effect";
+import { isDeepStrictEqual } from "node:util";
 import { makeDrainableWorker } from "@repo/shared/DrainableWorker";
 import {
   buildPrefixedBranchName,
@@ -25,6 +26,8 @@ import { GitCore } from "../../git/Services/GitCore.ts";
 import { ProviderAdapterRequestError, ProviderServiceError } from "../../provider/Errors.ts";
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { ProviderSessionDirectory } from "../../provider/Services/ProviderSessionDirectory.ts";
+import { readProviderOptionsFromRuntimePayload } from "../../provider/runtimePayload.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ProviderCommandReactor,
@@ -107,6 +110,7 @@ function extractBranchPrefix(branch: string): string {
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const providerService = yield* ProviderService;
+  const providerSessionDirectory = yield* ProviderSessionDirectory;
   const git = yield* GitCore;
   const textGeneration = yield* TextGeneration;
   const handledTurnStartKeys = yield* Cache.make<string, true>({
@@ -121,8 +125,6 @@ const make = Effect.gen(function* () {
         Cache.set(handledTurnStartKeys, key, true).pipe(Effect.as(Option.isSome(cached))),
       ),
     );
-
-  const threadProviderOptions = new Map<string, ProviderStartOptions>();
 
   const appendProviderFailureActivity = (input: {
     readonly threadId: ThreadId;
@@ -199,9 +201,19 @@ const make = Effect.gen(function* () {
       return yield* Effect.die(new Error(`Thread '${threadId}' was not found in read model.`));
     }
 
+    const persistedBinding = yield* providerSessionDirectory
+      .getBinding(threadId)
+      .pipe(Effect.map(Option.getOrUndefined));
+    const persistedProviderOptions = persistedBinding
+      ? readProviderOptionsFromRuntimePayload(persistedBinding.runtimePayload)
+      : undefined;
+    const effectiveProviderOptions = options?.providerOptions ?? persistedProviderOptions;
+
     const desiredRuntimeMode = thread.runtimeMode;
     const currentProvider: ProviderKind | undefined =
-      thread.session?.providerName === "codex" ? thread.session.providerName : undefined;
+      thread.session?.providerName === "codex" || thread.session?.providerName === "claudeCode"
+        ? thread.session.providerName
+        : undefined;
     const preferredProvider: ProviderKind | undefined = options?.provider ?? currentProvider;
     const desiredModel = options?.model ?? thread.model;
     const effectiveCwd = resolveThreadWorkspaceCwd({
@@ -227,8 +239,8 @@ const make = Effect.gen(function* () {
         ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
         ...(desiredModel ? { model: desiredModel } : {}),
         ...(options?.modelOptions !== undefined ? { modelOptions: options.modelOptions } : {}),
-        ...(options?.providerOptions !== undefined
-          ? { providerOptions: options.providerOptions }
+        ...(effectiveProviderOptions !== undefined
+          ? { providerOptions: effectiveProviderOptions }
           : {}),
         ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
         runtimeMode: desiredRuntimeMode,
@@ -263,13 +275,21 @@ const make = Effect.gen(function* () {
           : (yield* providerService.getCapabilities(currentProvider)).sessionModelSwitch;
       const modelChanged = options?.model !== undefined && options.model !== activeSession?.model;
       const shouldRestartForModelChange = modelChanged && sessionModelSwitch === "restart-session";
+      const providerOptionsChanged =
+        options?.providerOptions !== undefined &&
+        !isDeepStrictEqual(options.providerOptions, persistedProviderOptions);
 
-      if (!runtimeModeChanged && !providerChanged && !shouldRestartForModelChange) {
+      if (
+        !runtimeModeChanged &&
+        !providerChanged &&
+        !shouldRestartForModelChange &&
+        !providerOptionsChanged
+      ) {
         return existingSessionThreadId;
       }
 
       const resumeCursor =
-        providerChanged || shouldRestartForModelChange
+        providerChanged || shouldRestartForModelChange || providerOptionsChanged
           ? undefined
           : (activeSession?.resumeCursor ?? undefined);
       yield* Effect.logInfo("provider command reactor restarting provider session", {
@@ -283,6 +303,7 @@ const make = Effect.gen(function* () {
         providerChanged,
         modelChanged,
         shouldRestartForModelChange,
+        providerOptionsChanged,
         hasResumeCursor: resumeCursor !== undefined,
       });
       const restartedSession = yield* startProviderSession({
@@ -321,9 +342,6 @@ const make = Effect.gen(function* () {
     const thread = yield* resolveThread(input.threadId);
     if (!thread) {
       return;
-    }
-    if (input.providerOptions !== undefined) {
-      threadProviderOptions.set(input.threadId, input.providerOptions);
     }
     yield* ensureSessionForThread(input.threadId, input.createdAt, {
       ...(input.provider !== undefined ? { provider: input.provider } : {}),
@@ -615,14 +633,7 @@ const make = Effect.gen(function* () {
           if (!thread?.session || thread.session.status === "stopped") {
             return;
           }
-          const cachedProviderOptions = threadProviderOptions.get(event.payload.threadId);
-          yield* ensureSessionForThread(
-            event.payload.threadId,
-            event.occurredAt,
-            cachedProviderOptions !== undefined
-              ? { providerOptions: cachedProviderOptions }
-              : undefined,
-          );
+          yield* ensureSessionForThread(event.payload.threadId, event.occurredAt);
           return;
         }
         case "thread.turn-start-requested":

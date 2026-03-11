@@ -1,14 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   DEFAULT_COMMIT_AND_PUSH_PROMPT,
   getAppModelOptions,
   getSlashModelOptions,
   normalizeCustomModelSlugs,
+  normalizeEnvironmentVariablesText,
+  parseEnvironmentVariablesText,
+  isClaudeBedrockEnabled,
   normalizePromptHotkeyMessage,
   resolveAppModelSelection,
   getAppSettingsSnapshot,
 } from "./appSettings";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("app name settings", () => {
   it("defaults the custom app name to empty", () => {
@@ -58,6 +65,17 @@ describe("getAppModelOptions", () => {
       isCustom: true,
     });
   });
+
+  it("supports Claude custom models alongside built-in Claude options", () => {
+    const options = getAppModelOptions("claudeCode", ["claude/internal-preview"]);
+
+    expect(options.some((option) => option.slug === "claude-opus-4-6")).toBe(true);
+    expect(options.at(-1)).toEqual({
+      slug: "claude/internal-preview",
+      name: "claude/internal-preview",
+      isCustom: true,
+    });
+  });
 });
 
 describe("resolveAppModelSelection", () => {
@@ -83,6 +101,84 @@ describe("getSlashModelOptions", () => {
     const options = getSlashModelOptions("codex", ["openai/gpt-oss-120b"], "oss", "gpt-5.3-codex");
 
     expect(options.map((option) => option.slug)).toEqual(["openai/gpt-oss-120b"]);
+  });
+});
+
+describe("persisted settings migration", () => {
+  it("merges older saved payloads with new Claude defaults instead of resetting existing fields", () => {
+    const storage = new Map<string, string>();
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          storage.set(key, value);
+        },
+        removeItem: (key: string) => {
+          storage.delete(key);
+        },
+      },
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    });
+
+    window.localStorage.setItem(
+      "t3code:app-settings:v1",
+      JSON.stringify({
+        codexBinaryPath: "/usr/local/bin/codex",
+        customCodexModels: ["custom/codex-model"],
+        customAppName: "My App",
+      }),
+    );
+
+    const snapshot = getAppSettingsSnapshot();
+
+    expect(snapshot.codexBinaryPath).toBe("/usr/local/bin/codex");
+    expect(snapshot.customCodexModels).toEqual(["custom/codex-model"]);
+    expect(snapshot.customAppName).toBe("My App");
+    expect(snapshot.claudeBinaryPath).toBe("");
+    expect(snapshot.claudeEnvVars).toBe("");
+    expect(snapshot.customClaudeModels).toEqual([]);
+  });
+});
+
+describe("parseEnvironmentVariablesText", () => {
+  it("preserves trailing newlines while normalizing textarea input", () => {
+    expect(normalizeEnvironmentVariablesText("AWS_REGION=us-east-1\r\n")).toBe(
+      "AWS_REGION=us-east-1\n",
+    );
+  });
+
+  it("parses KEY=VALUE lines and ignores comments", () => {
+    expect(
+      parseEnvironmentVariablesText(
+        ["CLAUDE_CODE_USE_BEDROCK=1", "# comment", "AWS_REGION=us-east-1"].join("\n"),
+      ),
+    ).toEqual({
+      env: {
+        CLAUDE_CODE_USE_BEDROCK: "1",
+        AWS_REGION: "us-east-1",
+      },
+      invalidLineNumbers: [],
+    });
+  });
+
+  it("tracks invalid lines without discarding valid ones", () => {
+    expect(parseEnvironmentVariablesText(["AWS_REGION", "AWS_PROFILE=bedrock"].join("\n"))).toEqual(
+      {
+        env: {
+          AWS_PROFILE: "bedrock",
+        },
+        invalidLineNumbers: [1],
+      },
+    );
+  });
+});
+
+describe("isClaudeBedrockEnabled", () => {
+  it("detects Bedrock mode from Claude env settings", () => {
+    expect(isClaudeBedrockEnabled("CLAUDE_CODE_USE_BEDROCK=1")).toBe(true);
+    expect(isClaudeBedrockEnabled("CLAUDE_CODE_USE_BEDROCK=true")).toBe(true);
+    expect(isClaudeBedrockEnabled("AWS_REGION=us-east-1")).toBe(false);
   });
 });
 

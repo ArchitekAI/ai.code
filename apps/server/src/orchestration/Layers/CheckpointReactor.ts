@@ -487,6 +487,43 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    const rollbackProvider =
+      thread.session?.providerName === "codex" || thread.session?.providerName === "claudeCode"
+        ? thread.session.providerName
+        : undefined;
+    if (!rollbackProvider) {
+      yield* appendRevertFailureActivity({
+        threadId: event.payload.threadId,
+        turnCount: event.payload.turnCount,
+        detail: "No active provider binding is available for checkpoint revert.",
+        createdAt: now,
+      }).pipe(Effect.catch(() => Effect.void));
+      return;
+    }
+
+    const rollbackCapabilities = yield* providerService.getCapabilities(rollbackProvider).pipe(
+      Effect.catch((error: { message: string }) =>
+        appendRevertFailureActivity({
+          threadId: event.payload.threadId,
+          turnCount: event.payload.turnCount,
+          detail: error.message,
+          createdAt: now,
+        }).pipe(
+          Effect.catch(() => Effect.void),
+          Effect.flatMap(() => Effect.fail(error)),
+        ),
+      ),
+    );
+    if (rollbackCapabilities.conversationRollback === "unsupported") {
+      yield* appendRevertFailureActivity({
+        threadId: event.payload.threadId,
+        turnCount: event.payload.turnCount,
+        detail: `Checkpoint revert is not supported for provider '${rollbackProvider}'.`,
+        createdAt: now,
+      }).pipe(Effect.catch(() => Effect.void));
+      return;
+    }
+
     const currentTurnCount = thread.checkpoints.reduce(
       (maxTurnCount, checkpoint) => Math.max(maxTurnCount, checkpoint.checkpointTurnCount),
       0,
@@ -566,7 +603,7 @@ const make = Effect.gen(function* () {
         createdAt: now,
       })
       .pipe(
-        Effect.catch((error) =>
+        Effect.catch((error: { message: string }) =>
           appendRevertFailureActivity({
             threadId: event.payload.threadId,
             turnCount: event.payload.turnCount,
@@ -586,7 +623,7 @@ const make = Effect.gen(function* () {
 
     if (event.type === "thread.checkpoint-revert-requested") {
       yield* handleRevertRequested(event).pipe(
-        Effect.catch((error) =>
+        Effect.catch((error: { message: string }) =>
           appendRevertFailureActivity({
             threadId: event.payload.threadId,
             turnCount: event.payload.turnCount,
@@ -607,7 +644,7 @@ const make = Effect.gen(function* () {
     if (event.type === "turn.completed") {
       const turnId = toTurnId(event.turnId);
       yield* captureCheckpointFromTurnCompletion(event).pipe(
-        Effect.catch((error) =>
+        Effect.catch((error: { message: string }) =>
           appendCaptureFailureActivity({
             threadId: event.threadId,
             turnId,

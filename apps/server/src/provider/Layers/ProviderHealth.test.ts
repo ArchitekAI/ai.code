@@ -5,6 +5,7 @@ import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
+  checkClaudeCodeProviderStatus,
   checkCodexProviderStatus,
   hasCustomModelProvider,
   parseAuthStatusFromOutput,
@@ -86,6 +87,45 @@ function withTempCodexHome(configContent?: string) {
 
     if (configContent !== undefined) {
       yield* fileSystem.writeFileString(path.join(tmpDir, "config.toml"), configContent);
+    }
+
+    return { tmpDir } as const;
+  });
+}
+
+function withTempAwsHome(input?: {
+  readonly configContent?: string;
+  readonly credentialsContent?: string;
+}) {
+  return Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const tmpDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-test-aws-" });
+    const awsDir = path.join(tmpDir, ".aws");
+    yield* fileSystem.makeDirectory(awsDir, { recursive: true });
+
+    yield* Effect.acquireRelease(
+      Effect.sync(() => {
+        const originalHome = process.env.HOME;
+        process.env.HOME = tmpDir;
+        return originalHome;
+      }),
+      (originalHome) =>
+        Effect.sync(() => {
+          if (originalHome !== undefined) {
+            process.env.HOME = originalHome;
+          } else {
+            delete process.env.HOME;
+          }
+        }),
+    );
+
+    if (input?.configContent !== undefined) {
+      yield* fileSystem.writeFileString(path.join(awsDir, "config"), input.configContent);
+    }
+
+    if (input?.credentialsContent !== undefined) {
+      yield* fileSystem.writeFileString(path.join(awsDir, "credentials"), input.credentialsContent);
     }
 
     return { tmpDir } as const;
@@ -304,6 +344,144 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
             if (joined === "login status")
               return { stdout: "Not logged in\n", stderr: "", code: 1 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+  });
+
+  describe("checkClaudeCodeProviderStatus", () => {
+    it.effect("returns ready when Claude Code is installed and authenticated", () =>
+      Effect.gen(function* () {
+        const status = yield* checkClaudeCodeProviderStatus;
+        assert.strictEqual(status.provider, "claudeCode");
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "authenticated");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "1.2.3\n", stderr: "", code: 0 };
+            if (joined === "auth status")
+              return { stdout: "Authenticated as user@example.com\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("skips Claude login warnings when AWS auth env is present", () =>
+      Effect.gen(function* () {
+        const previousKey = process.env.AWS_ACCESS_KEY_ID;
+        yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            process.env.AWS_ACCESS_KEY_ID = "test-key";
+          }),
+          () =>
+            Effect.sync(() => {
+              if (previousKey !== undefined) {
+                process.env.AWS_ACCESS_KEY_ID = previousKey;
+              } else {
+                delete process.env.AWS_ACCESS_KEY_ID;
+              }
+            }),
+        );
+
+        const status = yield* checkClaudeCodeProviderStatus;
+        assert.strictEqual(status.provider, "claudeCode");
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "unknown");
+        assert.strictEqual(
+          status.message,
+          "AWS auth configuration detected for Claude Code. Skipping `claude auth status` because Bedrock-backed sessions do not use Claude account login.",
+        );
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "1.2.3\n", stderr: "", code: 0 };
+            throw new Error(`Auth probe should have been skipped but got args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("returns unavailable when the Claude CLI is missing", () =>
+      Effect.gen(function* () {
+        const status = yield* checkClaudeCodeProviderStatus;
+        assert.strictEqual(status.provider, "claudeCode");
+        assert.strictEqual(status.status, "error");
+        assert.strictEqual(status.available, false);
+        assert.strictEqual(status.authStatus, "unknown");
+        assert.strictEqual(
+          status.message,
+          "Claude Code CLI (`claude`) is not installed or not on PATH.",
+        );
+      }).pipe(Effect.provide(failingSpawnerLayer("spawn claude ENOENT"))),
+    );
+
+    it.effect("returns unauthenticated when Claude auth status reports login required", () =>
+      Effect.gen(function* () {
+        yield* withTempAwsHome();
+        const status = yield* checkClaudeCodeProviderStatus;
+        assert.strictEqual(status.provider, "claudeCode");
+        assert.strictEqual(status.status, "error");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "unauthenticated");
+        assert.strictEqual(
+          status.message,
+          "Claude Code is not authenticated. Run `claude auth login` and try again.",
+        );
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "1.2.3\n", stderr: "", code: 0 };
+            if (joined === "auth status") {
+              return {
+                stdout: "",
+                stderr: "Not logged in. Run claude auth login.",
+                code: 1,
+              };
+            }
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("downgrades Claude login warnings when AWS profile files are present", () =>
+      Effect.gen(function* () {
+        yield* withTempAwsHome({
+          configContent: "[default]\nregion = us-east-1\n",
+          credentialsContent:
+            "[default]\naws_access_key_id = example\naws_secret_access_key = example\n",
+        });
+
+        const status = yield* checkClaudeCodeProviderStatus;
+        assert.strictEqual(status.provider, "claudeCode");
+        assert.strictEqual(status.status, "warning");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "unknown");
+        assert.strictEqual(
+          status.message,
+          "AWS credential/profile files were detected on this machine. `claude auth status` only reflects Claude account login, so this warning may not apply to Bedrock-backed sessions.",
+        );
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "1.2.3\n", stderr: "", code: 0 };
+            if (joined === "auth status") {
+              return {
+                stdout: "",
+                stderr: "Not logged in. Run claude auth login.",
+                code: 1,
+              };
+            }
             throw new Error(`Unexpected args: ${joined}`);
           }),
         ),

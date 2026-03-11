@@ -24,6 +24,12 @@ import {
 } from "./orchestration";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
+const EnvironmentVariableKey = TrimmedNonEmptyStringSchema.check(
+  Schema.isMaxLength(128),
+  Schema.isPattern(/^[A-Za-z_][A-Za-z0-9_]*$/),
+);
+const EnvironmentVariableValue = Schema.String.check(Schema.isMaxLength(4096));
+const EnvironmentVariables = Schema.Record(EnvironmentVariableKey, EnvironmentVariableValue);
 const ProviderSessionStatus = Schema.Literals([
   "connecting",
   "ready",
@@ -51,9 +57,14 @@ const CodexProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyStringSchema),
   homePath: Schema.optional(TrimmedNonEmptyStringSchema),
 });
+const ClaudeCodeProviderStartOptions = Schema.Struct({
+  binaryPath: Schema.optional(TrimmedNonEmptyStringSchema),
+  env: Schema.optional(EnvironmentVariables),
+});
 
 export const ProviderStartOptions = Schema.Struct({
   codex: Schema.optional(CodexProviderStartOptions),
+  claudeCode: Schema.optional(ClaudeCodeProviderStartOptions),
 });
 export type ProviderStartOptions = typeof ProviderStartOptions.Type;
 

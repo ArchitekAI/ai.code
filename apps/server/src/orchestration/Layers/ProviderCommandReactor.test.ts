@@ -13,7 +13,7 @@ import {
   ThreadId,
   TurnId,
 } from "@repo/contracts";
-import { Effect, Exit, Layer, ManagedRuntime, PubSub, Scope, Stream } from "effect";
+import { Effect, Exit, Layer, ManagedRuntime, Option, PubSub, Scope, Stream } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ServerConfig } from "../../config.ts";
@@ -28,6 +28,11 @@ import {
 } from "../../provider/Services/ProviderService.ts";
 import { GitCore, type GitCoreShape } from "../../git/Services/GitCore.ts";
 import { TextGeneration, type TextGenerationShape } from "../../git/Services/TextGeneration.ts";
+import {
+  ProviderSessionDirectory,
+  type ProviderRuntimeBinding,
+  type ProviderSessionDirectoryShape,
+} from "../../provider/Services/ProviderSessionDirectory.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { ProviderCommandReactorLive } from "./ProviderCommandReactor.ts";
@@ -90,13 +95,14 @@ describe("ProviderCommandReactor", () => {
     const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
     let nextSessionIndex = 1;
     const runtimeSessions: Array<ProviderSession> = [];
+    const runtimeBindings = new Map<ThreadId, ProviderRuntimeBinding>();
     const startSession = vi.fn((_: unknown, input: unknown) => {
       const sessionIndex = nextSessionIndex++;
       const provider =
         typeof input === "object" &&
         input !== null &&
         "provider" in input &&
-        input.provider === "codex"
+        (input.provider === "codex" || input.provider === "claudeCode")
           ? input.provider
           : "codex";
       const resumeCursor =
@@ -134,6 +140,21 @@ describe("ProviderCommandReactor", () => {
         updatedAt: now,
       };
       runtimeSessions.push(session);
+      runtimeBindings.set(threadId, {
+        threadId,
+        provider,
+        runtimeMode: session.runtimeMode,
+        resumeCursor: session.resumeCursor,
+        runtimePayload: {
+          ...(model !== undefined ? { model } : {}),
+          ...(typeof input === "object" &&
+          input !== null &&
+          "providerOptions" in input &&
+          input.providerOptions !== undefined
+            ? { providerOptions: input.providerOptions }
+            : {}),
+        },
+      });
       return Effect.succeed(session);
     });
     const sendTurn = vi.fn((_: unknown) =>
@@ -179,6 +200,25 @@ describe("ProviderCommandReactor", () => {
         }),
       ),
     );
+    const providerSessionDirectory: ProviderSessionDirectoryShape = {
+      upsert: (binding) =>
+        Effect.sync(() => {
+          runtimeBindings.set(binding.threadId, binding);
+        }),
+      getProvider: (threadId) =>
+        Effect.sync(() => runtimeBindings.get(threadId)?.provider ?? "codex"),
+      getBinding: (threadId) =>
+        Effect.succeed(
+          runtimeBindings.has(threadId)
+            ? Option.some(runtimeBindings.get(threadId)!)
+            : Option.none<ProviderRuntimeBinding>(),
+        ),
+      remove: (threadId) =>
+        Effect.sync(() => {
+          runtimeBindings.delete(threadId);
+        }),
+      listThreadIds: () => Effect.succeed(Array.from(runtimeBindings.keys())),
+    };
 
     const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
     const service: ProviderServiceShape = {
@@ -192,6 +232,7 @@ describe("ProviderCommandReactor", () => {
       getCapabilities: (provider) =>
         Effect.succeed({
           sessionModelSwitch: provider === "codex" ? "in-session" : "in-session",
+          conversationRollback: provider === "claudeCode" ? "unsupported" : "supported",
         }),
       rollbackConversation: () => unsupported(),
       streamEvents: Stream.fromPubSub(runtimeEventPubSub),
@@ -206,6 +247,7 @@ describe("ProviderCommandReactor", () => {
     const layer = ProviderCommandReactorLive.pipe(
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(Layer.succeed(ProviderService, service)),
+      Layer.provideMerge(Layer.succeed(ProviderSessionDirectory, providerSessionDirectory)),
       Layer.provideMerge(Layer.succeed(GitCore, { renameBranch } as unknown as GitCoreShape)),
       Layer.provideMerge(
         Layer.succeed(TextGeneration, { generateBranchName } as unknown as TextGenerationShape),
@@ -433,6 +475,82 @@ describe("ProviderCommandReactor", () => {
     await waitFor(() => harness.sendTurn.mock.calls.length === 2);
     expect(harness.startSession.mock.calls.length).toBe(1);
     expect(harness.stopSession.mock.calls.length).toBe(0);
+  });
+
+  it("restarts the provider session when Claude provider options change", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-claude-bedrock-1"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-claude-bedrock-1"),
+          role: "user",
+          text: "first",
+          attachments: [],
+        },
+        provider: "claudeCode",
+        model: "claude-sonnet-4-5",
+        providerOptions: {
+          claudeCode: {
+            env: {
+              CLAUDE_CODE_USE_BEDROCK: "1",
+            },
+          },
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-claude-bedrock-2"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-claude-bedrock-2"),
+          role: "user",
+          text: "second",
+          attachments: [],
+        },
+        provider: "claudeCode",
+        model: "claude-sonnet-4-5",
+        providerOptions: {
+          claudeCode: {
+            env: {
+              CLAUDE_CODE_USE_BEDROCK: "1",
+              AWS_REGION: "us-east-1",
+            },
+          },
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+      provider: "claudeCode",
+      providerOptions: {
+        claudeCode: {
+          env: {
+            CLAUDE_CODE_USE_BEDROCK: "1",
+            AWS_REGION: "us-east-1",
+          },
+        },
+      },
+    });
+    expect(harness.startSession.mock.calls[1]?.[1]).not.toHaveProperty("resumeCursor");
   });
 
   it("restarts the provider session when runtime mode is updated on the thread", async () => {

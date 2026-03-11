@@ -113,6 +113,28 @@ describe("ProviderRuntimeEvent", () => {
     expect(parsed.payload.answers.sandbox_mode).toBe("workspace-write");
   });
 
+  it("accepts Claude-native raw source tags", () => {
+    const parsed = decodeRuntimeEvent({
+      type: "runtime.warning",
+      eventId: "event-claude-1",
+      provider: "claudeCode",
+      createdAt: "2026-02-28T00:00:02.000Z",
+      threadId: "thread-claude",
+      payload: {
+        message: "warning",
+      },
+      raw: {
+        source: "claude.sdk.message",
+        payload: {
+          type: "assistant",
+        },
+      },
+    });
+
+    expect(parsed.provider).toBe("claudeCode");
+    expect(parsed.raw?.source).toBe("claude.sdk.message");
+  });
+
   it("rejects legacy message.delta type", () => {
     expect(() =>
       decodeRuntimeEvent({

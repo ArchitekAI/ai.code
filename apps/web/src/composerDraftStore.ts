@@ -328,7 +328,7 @@ function removeDraftThreadStateIfUnmapped(input: {
 }
 
 function normalizeProviderKind(value: unknown): ProviderKind | null {
-  return value === "codex" ? value : null;
+  return value === "codex" || value === "claudeCode" ? value : null;
 }
 
 function revokeObjectPreviewUrl(previewUrl: string): void {

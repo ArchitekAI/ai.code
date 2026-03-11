@@ -26,6 +26,7 @@ import { ProviderHealth, type ProviderHealthShape } from "../Services/ProviderHe
 
 const DEFAULT_TIMEOUT_MS = 4_000;
 const CODEX_PROVIDER = "codex" as const;
+const CLAUDE_PROVIDER = "claudeCode" as const;
 
 // ── Pure helpers ────────────────────────────────────────────────────
 
@@ -41,12 +42,12 @@ function nonEmptyTrimmed(value: string | undefined): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function isCommandMissingCause(error: unknown): boolean {
+function isCommandMissingCause(error: unknown, command: string): boolean {
   if (!(error instanceof Error)) return false;
   const lower = error.message.toLowerCase();
   return (
-    lower.includes("command not found: codex") ||
-    lower.includes("spawn codex enoent") ||
+    lower.includes(`command not found: ${command}`) ||
+    lower.includes(`spawn ${command} enoent`) ||
     lower.includes("enoent") ||
     lower.includes("notfound")
   );
@@ -243,10 +244,10 @@ const collectStreamAsString = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.
     (acc, chunk) => acc + new TextDecoder().decode(chunk),
   );
 
-const runCodexCommand = (args: ReadonlyArray<string>) =>
+const runProviderCommand = (commandName: string, args: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const command = ChildProcess.make("codex", [...args], {
+    const command = ChildProcess.make(commandName, [...args], {
       shell: process.platform === "win32",
     });
 
@@ -274,7 +275,7 @@ export const checkCodexProviderStatus: Effect.Effect<
   const checkedAt = new Date().toISOString();
 
   // Probe 1: `codex --version` — is the CLI reachable?
-  const versionProbe = yield* runCodexCommand(["--version"]).pipe(
+  const versionProbe = yield* runProviderCommand("codex", ["--version"]).pipe(
     Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
     Effect.result,
   );
@@ -287,7 +288,7 @@ export const checkCodexProviderStatus: Effect.Effect<
       available: false,
       authStatus: "unknown" as const,
       checkedAt,
-      message: isCommandMissingCause(error)
+      message: isCommandMissingCause(error, "codex")
         ? "Codex CLI (`codex`) is not installed or not on PATH."
         : `Failed to execute Codex CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
     };
@@ -348,7 +349,7 @@ export const checkCodexProviderStatus: Effect.Effect<
     } satisfies ServerProviderStatus;
   }
 
-  const authProbe = yield* runCodexCommand(["login", "status"]).pipe(
+  const authProbe = yield* runProviderCommand("codex", ["login", "status"]).pipe(
     Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
     Effect.result,
   );
@@ -390,18 +391,220 @@ export const checkCodexProviderStatus: Effect.Effect<
   } satisfies ServerProviderStatus;
 });
 
+function parseClaudeAuthStatusFromOutput(result: CommandResult): {
+  readonly status: ServerProviderStatusState;
+  readonly authStatus: ServerProviderAuthStatus;
+  readonly message?: string;
+} {
+  const lowerOutput = `${result.stdout}\n${result.stderr}`.toLowerCase();
+  if (
+    lowerOutput.includes("not logged in") ||
+    lowerOutput.includes("login required") ||
+    lowerOutput.includes("authentication required") ||
+    lowerOutput.includes("run `claude auth login`") ||
+    lowerOutput.includes("run claude auth login")
+  ) {
+    return {
+      status: "error",
+      authStatus: "unauthenticated",
+      message: "Claude Code is not authenticated. Run `claude auth login` and try again.",
+    };
+  }
+  if (result.code === 0) {
+    return {
+      status: "ready",
+      authStatus: "authenticated",
+    };
+  }
+  const detail = detailFromResult(result);
+  return {
+    status: "warning",
+    authStatus: "unknown",
+    message: detail
+      ? `Could not verify Claude Code authentication status. ${detail}`
+      : "Could not verify Claude Code authentication status.",
+  };
+}
+
+const AWS_AUTH_ENV_KEYS = [
+  "CLAUDE_CODE_USE_BEDROCK",
+  "AWS_ACCESS_KEY_ID",
+  "AWS_PROFILE",
+  "AWS_WEB_IDENTITY_TOKEN_FILE",
+  "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+  "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+] as const;
+
+function hasAwsAuthEnvironmentHints(): boolean {
+  return AWS_AUTH_ENV_KEYS.some((key) => nonEmptyTrimmed(process.env[key]) !== undefined);
+}
+
+function hasAwsProfileMarkers(content: string | undefined): boolean {
+  if (!content) {
+    return false;
+  }
+
+  return content.split("\n").some((line) => {
+    const trimmed = line.trim().toLowerCase();
+    if (!trimmed || trimmed.startsWith("#")) {
+      return false;
+    }
+
+    return (
+      trimmed.startsWith("[default]") ||
+      trimmed.startsWith("[profile ") ||
+      trimmed.startsWith("aws_access_key_id") ||
+      trimmed.startsWith("credential_process") ||
+      trimmed.startsWith("sso_session") ||
+      trimmed.startsWith("role_arn")
+    );
+  });
+}
+
+const hasAwsCredentialFiles = Effect.gen(function* () {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const awsDir = path.join(OS.homedir(), ".aws");
+  const [configContent, credentialsContent] = yield* Effect.all([
+    fileSystem
+      .readFileString(path.join(awsDir, "config"))
+      .pipe(Effect.orElseSucceed(() => undefined)),
+    fileSystem
+      .readFileString(path.join(awsDir, "credentials"))
+      .pipe(Effect.orElseSucceed(() => undefined)),
+  ]);
+
+  return hasAwsProfileMarkers(configContent) || hasAwsProfileMarkers(credentialsContent);
+});
+
+export const checkClaudeCodeProviderStatus: Effect.Effect<
+  ServerProviderStatus,
+  never,
+  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+> = Effect.gen(function* () {
+  const checkedAt = new Date().toISOString();
+
+  const versionProbe = yield* runProviderCommand("claude", ["--version"]).pipe(
+    Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+    Effect.result,
+  );
+
+  if (Result.isFailure(versionProbe)) {
+    const error = versionProbe.failure;
+    return {
+      provider: CLAUDE_PROVIDER,
+      status: "error" as const,
+      available: false,
+      authStatus: "unknown" as const,
+      checkedAt,
+      message: isCommandMissingCause(error, "claude")
+        ? "Claude Code CLI (`claude`) is not installed or not on PATH."
+        : `Failed to execute Claude Code health check: ${error instanceof Error ? error.message : String(error)}.`,
+    };
+  }
+
+  if (Option.isNone(versionProbe.success)) {
+    return {
+      provider: CLAUDE_PROVIDER,
+      status: "error" as const,
+      available: false,
+      authStatus: "unknown" as const,
+      checkedAt,
+      message: "Claude Code CLI is installed but failed to run. Timed out while running command.",
+    };
+  }
+
+  const version = versionProbe.success.value;
+  if (version.code !== 0) {
+    const detail = detailFromResult(version);
+    return {
+      provider: CLAUDE_PROVIDER,
+      status: "error" as const,
+      available: false,
+      authStatus: "unknown" as const,
+      checkedAt,
+      message: detail
+        ? `Claude Code CLI is installed but failed to run. ${detail}`
+        : "Claude Code CLI is installed but failed to run.",
+    };
+  }
+
+  if (hasAwsAuthEnvironmentHints()) {
+    return {
+      provider: CLAUDE_PROVIDER,
+      status: "ready" as const,
+      available: true,
+      authStatus: "unknown" as const,
+      checkedAt,
+      message:
+        "AWS auth configuration detected for Claude Code. Skipping `claude auth status` because Bedrock-backed sessions do not use Claude account login.",
+    };
+  }
+
+  const authProbe = yield* runProviderCommand("claude", ["auth", "status"]).pipe(
+    Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+    Effect.result,
+  );
+
+  if (Result.isFailure(authProbe)) {
+    const error = authProbe.failure;
+    return {
+      provider: CLAUDE_PROVIDER,
+      status: "warning" as const,
+      available: true,
+      authStatus: "unknown" as const,
+      checkedAt,
+      message:
+        error instanceof Error
+          ? `Could not verify Claude Code authentication status: ${error.message}.`
+          : "Could not verify Claude Code authentication status.",
+    };
+  }
+
+  if (Option.isNone(authProbe.success)) {
+    return {
+      provider: CLAUDE_PROVIDER,
+      status: "warning" as const,
+      available: true,
+      authStatus: "unknown" as const,
+      checkedAt,
+      message:
+        "Could not verify Claude Code authentication status. Timed out while running command.",
+    };
+  }
+
+  const parsed = parseClaudeAuthStatusFromOutput(authProbe.success.value);
+  if (parsed.authStatus === "unauthenticated" && (yield* hasAwsCredentialFiles)) {
+    return {
+      provider: CLAUDE_PROVIDER,
+      status: "warning" as const,
+      available: true,
+      authStatus: "unknown" as const,
+      checkedAt,
+      message:
+        "AWS credential/profile files were detected on this machine. `claude auth status` only reflects Claude account login, so this warning may not apply to Bedrock-backed sessions.",
+    };
+  }
+  return {
+    provider: CLAUDE_PROVIDER,
+    status: parsed.status,
+    available: true,
+    authStatus: parsed.authStatus,
+    checkedAt,
+    ...(parsed.message ? { message: parsed.message } : {}),
+  } satisfies ServerProviderStatus;
+});
+
 // ── Layer ───────────────────────────────────────────────────────────
 
 export const ProviderHealthLive = Layer.effect(
   ProviderHealth,
   Effect.gen(function* () {
-    const codexStatusFiber = yield* checkCodexProviderStatus.pipe(
-      Effect.map(Array.of),
-      Effect.forkScoped,
-    );
+    const codexStatusFiber = yield* checkCodexProviderStatus.pipe(Effect.forkScoped);
+    const claudeStatusFiber = yield* checkClaudeCodeProviderStatus.pipe(Effect.forkScoped);
 
     return {
-      getStatuses: Fiber.join(codexStatusFiber),
+      getStatuses: Effect.all([Fiber.join(codexStatusFiber), Fiber.join(claudeStatusFiber)]),
     } satisfies ProviderHealthShape;
   }),
 );

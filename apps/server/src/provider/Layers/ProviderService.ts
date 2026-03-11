@@ -32,6 +32,10 @@ import {
 } from "../Services/ProviderSessionDirectory.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { AnalyticsService } from "../../telemetry/Services/AnalyticsService.ts";
+import {
+  readCwdFromRuntimePayload,
+  readProviderOptionsFromRuntimePayload,
+} from "../runtimePayload.ts";
 
 export interface ProviderServiceLiveOptions {
   readonly canonicalEventLogPath?: string;
@@ -97,29 +101,6 @@ function toRuntimePayloadFromSession(
     lastError: session.lastError ?? null,
     ...(extra?.providerOptions !== undefined ? { providerOptions: extra.providerOptions } : {}),
   };
-}
-
-function readPersistedProviderOptions(
-  runtimePayload: ProviderRuntimeBinding["runtimePayload"],
-): Record<string, unknown> | undefined {
-  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
-    return undefined;
-  }
-  const raw = "providerOptions" in runtimePayload ? runtimePayload.providerOptions : undefined;
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
-  return raw as Record<string, unknown>;
-}
-
-function readPersistedCwd(
-  runtimePayload: ProviderRuntimeBinding["runtimePayload"],
-): string | undefined {
-  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
-    return undefined;
-  }
-  const rawCwd = "cwd" in runtimePayload ? runtimePayload.cwd : undefined;
-  if (typeof rawCwd !== "string") return undefined;
-  const trimmed = rawCwd.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 const makeProviderService = (options?: ProviderServiceLiveOptions) =>
@@ -212,8 +193,10 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           );
         }
 
-        const persistedCwd = readPersistedCwd(input.binding.runtimePayload);
-        const persistedProviderOptions = readPersistedProviderOptions(input.binding.runtimePayload);
+        const persistedCwd = readCwdFromRuntimePayload(input.binding.runtimePayload);
+        const persistedProviderOptions = readProviderOptionsFromRuntimePayload(
+          input.binding.runtimePayload,
+        );
 
         const resumed = yield* adapter.startSession({
           threadId: input.binding.threadId,

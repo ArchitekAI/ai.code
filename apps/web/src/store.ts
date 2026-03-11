@@ -6,15 +6,12 @@ import {
   type OrchestrationReadModel,
   type OrchestrationSessionStatus,
 } from "@repo/contracts";
-import {
-  getModelOptions,
-  normalizeModelSlug,
-  resolveModelSlug,
-  resolveModelSlugForProvider,
-} from "@repo/shared/model";
+import { resolveModelSlugForProvider } from "@repo/shared/model";
 import { create } from "zustand";
 import { type ChatMessage, type Project, type Thread, type Worktree } from "./types";
 import { Debouncer } from "@tanstack/react-pacer";
+import { getAppSettingsSnapshot, getCustomModelsForProvider } from "./appSettings";
+import { inferProviderForModel } from "./providerModels";
 
 // ── State ────────────────────────────────────────────────────────────
 
@@ -145,9 +142,19 @@ function mapProjectsFromReadModel(
       name: project.title,
       cwd: project.workspaceRoot,
       managedWorktreeRoot: project.managedWorktreeRoot,
-      model:
-        existing?.model ??
-        resolveModelSlug(project.defaultModel ?? DEFAULT_MODEL_BY_PROVIDER.codex),
+      model: (() => {
+        if (existing?.model) {
+          return existing.model;
+        }
+        const provider = inferProviderForModel({
+          model: project.defaultModel ?? DEFAULT_MODEL_BY_PROVIDER.codex,
+          sessionProviderName: null,
+        });
+        return resolveModelSlugForProvider(
+          provider,
+          project.defaultModel ?? DEFAULT_MODEL_BY_PROVIDER[provider],
+        );
+      })(),
       defaultWorktreeBaseBranch: project.defaultWorktreeBaseBranch,
       defaultPullRequestBaseBranch: project.defaultPullRequestBaseBranch,
       pullRequestPromptTemplate: project.pullRequestPromptTemplate,
@@ -199,24 +206,8 @@ function toLegacySessionStatus(
 }
 
 function toLegacyProvider(providerName: string | null): ProviderKind {
-  if (providerName === "codex") {
+  if (providerName === "codex" || providerName === "claudeCode") {
     return providerName;
-  }
-  return "codex";
-}
-
-const CODEX_MODEL_SLUGS = new Set<string>(getModelOptions("codex").map((option) => option.slug));
-
-function inferProviderForThreadModel(input: {
-  readonly model: string;
-  readonly sessionProviderName: string | null;
-}): ProviderKind {
-  if (input.sessionProviderName === "codex") {
-    return input.sessionProviderName;
-  }
-  const normalizedCodex = normalizeModelSlug(input.model, "codex");
-  if (normalizedCodex && CODEX_MODEL_SLUGS.has(normalizedCodex)) {
-    return "codex";
   }
   return "codex";
 }
@@ -283,6 +274,11 @@ function mapThreadsFromReadModel(input: {
   readonly worktreeById: ReadonlyMap<Worktree["id"], Worktree>;
   readonly existingThreadById: ReadonlyMap<Thread["id"], Thread>;
 }): Thread[] {
+  const appSettings = getAppSettingsSnapshot();
+  const customModelsByProvider = {
+    codex: getCustomModelsForProvider(appSettings, "codex"),
+    claudeCode: getCustomModelsForProvider(appSettings, "claudeCode"),
+  } as const;
   const threads: Thread[] = [];
   for (const thread of input.incoming.filter((entry) => entry.deletedAt === null)) {
     const existing = input.existingThreadById.get(thread.id);
@@ -297,9 +293,10 @@ function mapThreadsFromReadModel(input: {
       projectId: worktree.projectId,
       title: thread.title,
       model: resolveModelSlugForProvider(
-        inferProviderForThreadModel({
+        inferProviderForModel({
           model: thread.model,
           sessionProviderName: thread.session?.providerName ?? null,
+          customModelsByProvider,
         }),
         thread.model,
       ),
