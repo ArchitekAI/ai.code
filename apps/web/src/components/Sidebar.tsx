@@ -74,6 +74,7 @@ import { gitStatusQueryOptions } from "../lib/gitReactQuery";
 import { readNativeApi } from "../nativeApi";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { deleteProjectCascade } from "../lib/deleteProjectCascade";
 
 import { useThreadActions } from "../hooks/useThreadActions";
 import { toastManager } from "./ui/toast";
@@ -1252,29 +1253,27 @@ export default function Sidebar() {
       }
       if (clicked !== "delete") return;
 
-      const projectThreadIds = threadIdsByProjectId[projectId] ?? [];
-      if (projectThreadIds.length > 0) {
-        toastManager.add({
-          type: "warning",
-          title: "Project is not empty",
-          description: "Delete all threads in this project before removing it.",
-        });
-        return;
-      }
-
-      const confirmed = await api.dialogs.confirm(`Remove project "${project.name}"?`);
-      if (!confirmed) return;
-
       try {
-        const projectDraftThread = getDraftThreadByProjectId(projectId);
-        if (projectDraftThread) {
-          clearComposerDraftForThread(projectDraftThread.threadId);
-        }
-        clearProjectDraftThreadId(projectId);
-        await api.orchestration.dispatchCommand({
-          type: "project.delete",
-          commandId: newCommandId(),
+        await deleteProjectCascade({
           projectId,
+          projectName: project.name,
+          projectThreadIds: threadIdsByProjectId[projectId] ?? [],
+          confirm: (message) => api.dialogs.confirm(message),
+          deleteThread,
+          prepareProjectDeletion: () => {
+            const projectDraftThread = getDraftThreadByProjectId(projectId);
+            if (projectDraftThread) {
+              clearComposerDraftForThread(projectDraftThread.threadId);
+            }
+            clearProjectDraftThreadId(projectId);
+          },
+          deleteProject: async (targetProjectId) => {
+            await api.orchestration.dispatchCommand({
+              type: "project.delete",
+              commandId: newCommandId(),
+              projectId: targetProjectId,
+            });
+          },
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error removing project.";
@@ -1290,6 +1289,7 @@ export default function Sidebar() {
       clearComposerDraftForThread,
       clearProjectDraftThreadId,
       copyPathToClipboard,
+      deleteThread,
       getDraftThreadByProjectId,
       projects,
       threadIdsByProjectId,
