@@ -8,6 +8,7 @@ import {
   projectFaviconRouteLayer,
   staticAndDevRouteLayer,
 } from "./http";
+import { linearWebhookRouteLayer } from "./linear/Layers/LinearWebhookRoute";
 import { fixPath } from "./os-jank";
 import { websocketRpcRouteLayer } from "./ws";
 import { OpenLive } from "./open";
@@ -40,6 +41,7 @@ import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus"
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion";
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor";
+import { BootstrapTurnServiceLive } from "./orchestration/Layers/BootstrapTurnService";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry";
 import { ServerSettingsLive } from "./serverSettings";
 import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver";
@@ -47,6 +49,10 @@ import { WorkspaceEntriesLive } from "./workspace/Layers/WorkspaceEntries";
 import { WorkspaceFileSystemLive } from "./workspace/Layers/WorkspaceFileSystem";
 import { WorkspacePathsLive } from "./workspace/Layers/WorkspacePaths";
 import { ProjectSetupScriptRunnerLive } from "./project/Layers/ProjectSetupScriptRunner";
+import { LinearActivitySinkLive } from "./linear/Layers/LinearActivitySink";
+import { LinearClientLive } from "./linear/Layers/LinearClient";
+import { LinearSessionRegistryLive } from "./linear/Layers/LinearSessionRegistry";
+import { LinearWebhookHandlerLive } from "./linear/Layers/LinearWebhookHandler";
 import { ObservabilityLive } from "./observability/Layers/Observability";
 
 const PtyAdapterLive = Layer.unwrap(
@@ -102,6 +108,7 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(ProviderRuntimeIngestionLive),
   Layer.provideMerge(ProviderCommandReactorLive),
   Layer.provideMerge(CheckpointReactorLive),
+  Layer.provideMerge(LinearActivitySinkLive),
   Layer.provideMerge(RuntimeReceiptBusLive),
 );
 
@@ -161,19 +168,50 @@ const ProviderLayerLive = Layer.unwrap(
 
 const PersistenceLayerLive = Layer.empty.pipe(Layer.provideMerge(SqlitePersistenceLayerLive));
 
-const GitLayerLive = Layer.empty.pipe(
-  Layer.provideMerge(
-    GitManagerLive.pipe(
-      Layer.provideMerge(ProjectSetupScriptRunnerLive),
-      Layer.provideMerge(GitCoreLive),
-      Layer.provideMerge(GitHubCliLive),
-      Layer.provideMerge(RoutingTextGenerationLive),
-    ),
-  ),
-  Layer.provideMerge(GitCoreLive),
+const OrchestrationRuntimeLive = OrchestrationLayerLive.pipe(
+  // Projection repositories and event storage are all SQLite-backed.
+  Layer.provide(PersistenceLayerLive),
+);
+
+const CheckpointingRuntimeLive = CheckpointingLayerLive.pipe(
+  // Checkpoint queries and stores persist through SQLite as well.
+  Layer.provide(PersistenceLayerLive),
+);
+
+const LinearSessionRegistryRuntimeLive = LinearSessionRegistryLive.pipe(
+  // Linear session mappings live in the same SQLite database as the rest of the server state.
+  Layer.provide(PersistenceLayerLive),
 );
 
 const TerminalLayerLive = TerminalManagerLive.pipe(Layer.provide(PtyAdapterLive));
+
+const ProjectSetupScriptRuntimeLive = ProjectSetupScriptRunnerLive.pipe(
+  // The setup runner needs both thread/project state and a live terminal to launch scripts.
+  Layer.provide(TerminalLayerLive),
+  Layer.provide(OrchestrationRuntimeLive),
+);
+
+const GitManagerRuntimeLive = GitManagerLive.pipe(
+  // Build GitManager against the fully provisioned git/setup services instead of leaking them.
+  Layer.provide(ProjectSetupScriptRuntimeLive),
+  Layer.provide(GitCoreLive),
+  Layer.provide(GitHubCliLive),
+  Layer.provide(RoutingTextGenerationLive),
+  Layer.provide(ServerSettingsLive),
+);
+
+const GitLayerLive = Layer.mergeAll(
+  GitCoreLive,
+  GitHubCliLive,
+  RoutingTextGenerationLive,
+  ProjectSetupScriptRuntimeLive,
+  GitManagerRuntimeLive,
+);
+
+const BootstrapTurnRuntimeLive = BootstrapTurnServiceLive.pipe(
+  // Bootstrap dispatch depends on git worktrees, setup scripts, and orchestration dispatch.
+  Layer.provide(Layer.mergeAll(GitLayerLive, OrchestrationRuntimeLive)),
+);
 
 const WorkspaceLayerLive = Layer.mergeAll(
   WorkspacePathsLive,
@@ -186,13 +224,16 @@ const WorkspaceLayerLive = Layer.mergeAll(
 
 const RuntimeDependenciesLive = ReactorLayerLive.pipe(
   // Core Services
-  Layer.provideMerge(CheckpointingLayerLive),
+  Layer.provideMerge(CheckpointingRuntimeLive),
   Layer.provideMerge(GitLayerLive),
-  Layer.provideMerge(OrchestrationLayerLive),
+  Layer.provideMerge(OrchestrationRuntimeLive),
   Layer.provideMerge(ProviderLayerLive),
   Layer.provideMerge(TerminalLayerLive),
   Layer.provideMerge(PersistenceLayerLive),
   Layer.provideMerge(KeybindingsLive),
+  Layer.provideMerge(BootstrapTurnRuntimeLive),
+  Layer.provideMerge(LinearClientLive),
+  Layer.provideMerge(LinearSessionRegistryRuntimeLive),
   Layer.provideMerge(ProviderRegistryLive),
   Layer.provideMerge(ServerSettingsLive),
   Layer.provideMerge(WorkspaceLayerLive),
@@ -204,16 +245,23 @@ const RuntimeDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(ServerLifecycleEventsLive),
 );
 
-const RuntimeServicesLive = ServerRuntimeStartupLive.pipe(
+const RuntimeServicesBaseLive = ServerRuntimeStartupLive.pipe(
   Layer.provideMerge(RuntimeDependenciesLive),
+);
+
+const RuntimeServicesLive = Layer.mergeAll(
+  RuntimeServicesBaseLive,
+  // Build the webhook handler only after the startup/runtime services exist to avoid leaking its deps.
+  LinearWebhookHandlerLive.pipe(Layer.provide(RuntimeServicesBaseLive)),
 );
 
 export const makeRoutesLayer = Layer.mergeAll(
   attachmentsRouteLayer,
+  linearWebhookRouteLayer,
   otlpTracesProxyRouteLayer,
   projectFaviconRouteLayer,
-  staticAndDevRouteLayer,
   websocketRpcRouteLayer,
+  staticAndDevRouteLayer,
 );
 
 export const makeServerLayer = Layer.unwrap(
@@ -238,11 +286,11 @@ export const makeServerLayer = Layer.unwrap(
     );
 
     return serverApplicationLayer.pipe(
-      Layer.provideMerge(RuntimeServicesLive),
-      Layer.provideMerge(HttpServerLive),
+      Layer.provide(RuntimeServicesLive),
+      Layer.provide(HttpServerLive),
       Layer.provide(ObservabilityLive),
-      Layer.provideMerge(FetchHttpClient.layer),
-      Layer.provideMerge(PlatformServicesLive),
+      Layer.provide(FetchHttpClient.layer),
+      Layer.provide(PlatformServicesLive),
     );
   }),
 );

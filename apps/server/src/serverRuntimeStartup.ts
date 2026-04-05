@@ -300,6 +300,26 @@ const makeServerRuntimeStartup = Effect.gen(function* () {
       ),
     );
 
+    if (serverConfig.linearSettingsOverrides) {
+      yield* Effect.logDebug("startup phase: applying Linear env-backed settings overrides");
+      yield* runStartupPhase(
+        "settings.linear-overrides",
+        serverSettings
+          .updateSettings({
+            linear: serverConfig.linearSettingsOverrides,
+          })
+          .pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("failed to apply Linear settings overrides", {
+                path: error.settingsPath,
+                detail: error.detail,
+                cause: error.cause,
+              }),
+            ),
+          ),
+      );
+    }
+
     yield* Effect.logDebug("startup phase: starting orchestration reactors");
     yield* runStartupPhase(
       "reactors.start",

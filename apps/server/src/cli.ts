@@ -1,4 +1,5 @@
 import { NetService } from "@t3tools/shared/Net";
+import { LinearVerificationMode } from "@t3tools/contracts";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
 import { Config, Effect, FileSystem, LogLevel, Option, Path, Schema } from "effect";
 import { Argument, Command, Flag, GlobalFlag } from "effect/unstable/cli";
@@ -33,7 +34,9 @@ const BootstrapEnvelopeSchema = Schema.Struct({
 });
 
 const modeFlag = Flag.choice("mode", RuntimeMode.literals).pipe(
-  Flag.withDescription("Runtime mode. `desktop` keeps loopback defaults unless overridden."),
+  Flag.withDescription(
+    "Runtime mode. `desktop` keeps loopback defaults unless overridden. `remote` binds to 0.0.0.0, disables browser auto-open, and disables open-in-editor.",
+  ),
   Flag.optional,
 );
 const portFlag = Flag.integer("port").pipe(
@@ -133,6 +136,18 @@ const EnvServerConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  linearWebhookSecret: Config.string("T3CODE_LINEAR_WEBHOOK_SECRET").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  linearApiToken: Config.string("T3CODE_LINEAR_API_TOKEN").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  linearVerificationMode: Config.schema(
+    LinearVerificationMode,
+    "T3CODE_LINEAR_VERIFICATION_MODE",
+  ).pipe(Config.option, Config.map(Option.getOrUndefined)),
 });
 
 interface CliServerFlags {
@@ -245,7 +260,7 @@ export const resolveServerConfig = (
             Option.fromUndefinedOr(bootstrap.noBrowser),
           ),
         ),
-        () => mode === "desktop",
+        () => mode === "desktop" || mode === "remote",
       ),
     );
     const authToken = Option.getOrUndefined(
@@ -288,9 +303,19 @@ export const resolveServerConfig = (
         Option.fromUndefinedOr(env.host),
         Option.flatMap(bootstrapEnvelope, (bootstrap) => Option.fromUndefinedOr(bootstrap.host)),
       ),
-      () => (mode === "desktop" ? "127.0.0.1" : undefined),
+      () => (mode === "desktop" ? "127.0.0.1" : mode === "remote" ? "0.0.0.0" : undefined),
     );
     const logLevel = Option.getOrElse(cliLogLevel, () => env.logLevel);
+    const linearSettingsOverrides =
+      env.linearWebhookSecret || env.linearApiToken || env.linearVerificationMode
+        ? {
+            // Environment-provided Linear config should take effect immediately on startup.
+            enabled: true,
+            ...(env.linearWebhookSecret ? { webhookSecret: env.linearWebhookSecret } : {}),
+            ...(env.linearApiToken ? { apiToken: env.linearApiToken } : {}),
+            ...(env.linearVerificationMode ? { verificationMode: env.linearVerificationMode } : {}),
+          }
+        : undefined;
 
     const config: ServerConfigShape = {
       logLevel,
@@ -330,6 +355,7 @@ export const resolveServerConfig = (
       authToken,
       autoBootstrapProjectFromCwd,
       logWebSocketEvents,
+      linearSettingsOverrides,
     };
 
     return config;

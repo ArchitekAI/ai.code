@@ -24,6 +24,27 @@ For each entry, capture:
 
 ## 2026-04-04
 
+### Linear webhook ingress for agent sessions
+
+- Status: Local-only
+- Merge risk: Medium
+- User context: The user wanted T3 Code to react to Linear agent-session webhooks so assigning work in Linear can create or continue a coding session without manually starting from the UI.
+- Why: This fork now supports Linear-driven agent ingress, session tracking, and outbound Linear activity updates while reusing the existing orchestration engine and worktree bootstrap flow.
+- Behavior:
+  - `POST /webhook/linear` verifies Linear webhooks and maps supported events into orchestration commands.
+  - Linear assignment / prompt events can create a project, create a worktree-backed thread, continue an existing thread for the same issue, or stop a running thread.
+  - Linear-linked threads stream assistant progress back to Linear as agent activities.
+- Files:
+  - `packages/contracts/src/linear.ts`
+  - `packages/contracts/src/settings.ts`
+  - `apps/server/src/linear/Layers/LinearWebhookRoute.ts`
+  - `apps/server/src/linear/Layers/LinearWebhookHandler.ts`
+  - `apps/server/src/linear/Layers/LinearActivitySink.ts`
+  - `apps/server/src/linear/Layers/LinearSessionRegistry.ts`
+  - `apps/server/src/orchestration/Layers/BootstrapTurnService.ts`
+  - `apps/server/src/persistence/Migrations/020_LinearSessions.ts`
+- Notes: The fork adds persistent Linear session mappings in SQLite and environment-backed Linear settings overrides at startup. Upstream merges touching server startup, orchestration bootstrap, or settings decoding will need extra care.
+
 ### Project deletion cascades through project threads
 
 - Status: Local-only
@@ -36,6 +57,38 @@ For each entry, capture:
   - `apps/web/src/lib/deleteProjectCascade.ts`
   - `apps/web/src/lib/deleteProjectCascade.test.ts`
 - Notes: This was intentionally implemented in the web layer instead of adding a new orchestration command, so it should be easier to preserve across upstream pulls.
+
+### Fork-local desktop install/update workflow and app identity
+
+- Status: Local-only
+- Merge risk: Medium
+- User context: The user wanted a one-command way to pull, build, install, and replace the locally installed desktop app from this fork, and wanted the fork to have a different app name so it can live separately from upstream T3 Code in the Dock.
+- Why: This repo now has a local install workflow optimized for using the fork as an everyday app instead of only as a dev environment.
+- Behavior: `bun run dist:install` pulls the current branch, installs dependencies, builds a macOS `.app`, replaces the installed app, and reopens it. The desktop builder also supports fork-specific product name and app id overrides so the installed app can appear as a separate Dock app.
+- Files:
+  - `package.json`
+  - `scripts/build-desktop-artifact.ts`
+  - `scripts/install-local-desktop.ts`
+  - `apps/desktop/src/main.ts`
+- Notes: The install script defaults to the app name `AI Code` and app id `com.t3tools.aicode`, but both can be overridden with environment variables or script flags.
+
+### Remote runtime mode (`--mode remote`)
+
+- Status: Local-only
+- Merge risk: Low
+- User context: The user wanted to run the T3 Code server on a remote cloud machine and connect from a local browser, but several features assumed co-located client and server.
+- Why: A new `remote` runtime mode disables features that only work when client and server share a machine, and sets network defaults appropriate for remote access.
+- Behavior: `t3 --mode remote` (or `T3CODE_MODE=remote`) applies these defaults:
+  - Binds to `0.0.0.0` (all interfaces) instead of localhost.
+  - Disables browser auto-open (`noBrowser: true`).
+  - Disables `shellOpenInEditor` RPC — returns `OpenError` explaining the feature is unavailable.
+  - Returns empty `availableEditors` in server config so the client hides editor buttons.
+  - All other features (terminal, git, diffs, orchestration) work unchanged over the network.
+- Files:
+  - `apps/server/src/config.ts` — extended `RuntimeMode` union with `"remote"`
+  - `apps/server/src/cli.ts` — remote-mode defaults for host, noBrowser
+  - `apps/server/src/ws.ts` — gates `shellOpenInEditor` and `availableEditors` on mode
+- Notes: The desktop folder picker (`desktop:pick-folder`) was already gated behind `isElectron` on the client and returns `null` in web browsers, so no change was needed there. The client auto-detects the WebSocket URL from `window.location.origin`, so pointing a browser at `https://remote-host:3773` works out of the box.
 
 ### Collapsible project sidebar with Cmd+B keybinding
 

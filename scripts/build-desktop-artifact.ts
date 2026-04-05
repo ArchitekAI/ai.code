@@ -184,6 +184,18 @@ interface StagePackageJson {
   };
 }
 
+function resolveDesktopBuildProductName(): string {
+  const configured = process.env.T3CODE_DESKTOP_PRODUCT_NAME?.trim();
+  return configured && configured.length > 0
+    ? configured
+    : (desktopPackageJson.productName ?? "T3 Code");
+}
+
+function resolveDesktopBuildAppId(): string {
+  const configured = process.env.T3CODE_DESKTOP_APP_ID?.trim();
+  return configured && configured.length > 0 ? configured : "com.t3tools.t3code";
+}
+
 const AzureTrustedSigningOptionsConfig = Config.all({
   publisherName: Config.string("AZURE_TRUSTED_SIGNING_PUBLISHER_NAME"),
   endpoint: Config.string("AZURE_TRUSTED_SIGNING_ENDPOINT"),
@@ -466,13 +478,14 @@ function resolveGitHubPublishConfig():
 const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   platform: typeof BuildPlatform.Type,
   target: string,
+  appId: string,
   productName: string,
   signed: boolean,
   mockUpdates: boolean,
   mockUpdateServerPort: string | undefined,
 ) {
   const buildConfig: Record<string, unknown> = {
-    appId: "com.t3tools.t3code",
+    appId,
     productName,
     artifactName: "T3-Code-${version}-${arch}.${ext}",
     directories: {
@@ -598,6 +611,8 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
   const appVersion = options.version ?? serverPackageJson.version;
   const commitHash = resolveGitCommitHash(repoRoot);
+  const buildProductName = resolveDesktopBuildProductName();
+  const buildAppId = resolveDesktopBuildAppId();
   const mkdir = options.keepStage ? fs.makeTempDirectory : fs.makeTempDirectoryScoped;
   const stageRoot = yield* mkdir({
     prefix: `t3code-desktop-${options.platform}-stage-`,
@@ -659,13 +674,14 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     buildVersion: appVersion,
     t3codeCommitHash: commitHash,
     private: true,
-    description: "T3 Code desktop build",
+    description: `${buildProductName} desktop build`,
     author: "T3 Tools",
     main: "apps/desktop/dist-electron/main.js",
     build: yield* createBuildConfig(
       options.platform,
       options.target,
-      desktopPackageJson.productName ?? "T3 Code",
+      buildAppId,
+      buildProductName,
       options.signed,
       options.mockUpdates,
       options.mockUpdateServerPort,
@@ -746,10 +762,14 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   for (const entry of stageEntries) {
     const from = path.join(stageDistDir, entry);
     const stat = yield* fs.stat(from).pipe(Effect.catch(() => Effect.succeed(null)));
-    if (!stat || stat.type !== "File") continue;
+    if (!stat || (stat.type !== "File" && stat.type !== "Directory")) continue;
 
     const to = path.join(options.outputDir, entry);
-    yield* fs.copyFile(from, to);
+    if (stat.type === "Directory") {
+      yield* fs.copy(from, to);
+    } else {
+      yield* fs.copyFile(from, to);
+    }
     copiedArtifacts.push(to);
   }
 

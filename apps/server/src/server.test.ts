@@ -52,10 +52,18 @@ import {
 } from "./orchestration/Services/OrchestrationEngine.ts";
 import { OrchestrationListenerCallbackError } from "./orchestration/Errors.ts";
 import {
+  BootstrapTurnService,
+  type BootstrapTurnServiceShape,
+} from "./orchestration/Services/BootstrapTurnService.ts";
+import {
   ProjectionSnapshotQuery,
   type ProjectionSnapshotQueryShape,
 } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
+import {
+  LinearWebhookHandler,
+  type LinearWebhookHandlerShape,
+} from "./linear/Services/LinearWebhookHandler.ts";
 import {
   ProviderRegistry,
   type ProviderRegistryShape,
@@ -255,9 +263,11 @@ const buildAppUnderTest = (options?: {
     projectSetupScriptRunner?: Partial<ProjectSetupScriptRunnerShape>;
     terminalManager?: Partial<TerminalManagerShape>;
     orchestrationEngine?: Partial<OrchestrationEngineShape>;
+    bootstrapTurnService?: Partial<BootstrapTurnServiceShape>;
     projectionSnapshotQuery?: Partial<ProjectionSnapshotQueryShape>;
     checkpointDiffQuery?: Partial<CheckpointDiffQueryShape>;
     browserTraceCollector?: Partial<BrowserTraceCollectorShape>;
+    linearWebhookHandler?: Partial<LinearWebhookHandlerShape>;
     serverLifecycleEvents?: Partial<ServerLifecycleEventsShape>;
     serverRuntimeStartup?: Partial<ServerRuntimeStartupShape>;
   };
@@ -291,6 +301,7 @@ const buildAppUnderTest = (options?: {
       authToken: undefined,
       autoBootstrapProjectFromCwd: false,
       logWebSocketEvents: false,
+      linearSettingsOverrides: undefined,
       ...options?.config,
     };
     const layerConfig = Layer.succeed(ServerConfig, config);
@@ -359,6 +370,13 @@ const buildAppUnderTest = (options?: {
         }),
       ),
       Layer.provide(
+        Layer.mock(BootstrapTurnService)({
+          // Tests only need routing to succeed, not the real bootstrap orchestration path.
+          dispatch: () => Effect.succeed({ sequence: 0 }),
+          ...options?.layers?.bootstrapTurnService,
+        }),
+      ),
+      Layer.provide(
         Layer.mock(ProjectionSnapshotQuery)({
           getSnapshot: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
           ...options?.layers?.projectionSnapshotQuery,
@@ -387,6 +405,12 @@ const buildAppUnderTest = (options?: {
         Layer.mock(BrowserTraceCollector)({
           record: () => Effect.void,
           ...options?.layers?.browserTraceCollector,
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(LinearWebhookHandler)({
+          handleWebhook: () => Effect.void,
+          ...options?.layers?.linearWebhookHandler,
         }),
       ),
       Layer.provide(

@@ -2,6 +2,7 @@ import { Effect } from "effect";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import { TrimmedNonEmptyString, TrimmedString } from "./baseSchemas";
+import { LinearProjectMappings, LinearSettings } from "./linear";
 import {
   ClaudeModelOptions,
   CodexModelOptions,
@@ -95,6 +96,8 @@ export const ServerSettings = Schema.Struct({
     claudeAgent: ClaudeSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   }).pipe(Schema.withDecodingDefault(() => ({}))),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(() => ({}))),
+  linear: LinearSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+  linearProjectMappings: LinearProjectMappings.pipe(Schema.withDecodingDefault(() => ({}))),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -175,6 +178,29 @@ export const ServerSettingsPatch = Schema.Struct({
     Schema.Struct({
       codex: Schema.optionalKey(CodexSettingsPatch),
       claudeAgent: Schema.optionalKey(ClaudeSettingsPatch),
+    }),
+  ),
+  linear: Schema.optionalKey(
+    Schema.Struct({
+      enabled: Schema.optionalKey(Schema.Boolean),
+      webhookSecret: Schema.optionalKey(Schema.String),
+      apiToken: Schema.optionalKey(Schema.String),
+      verificationMode: Schema.optionalKey(LinearSettings.fields.verificationMode),
+    }),
+  ),
+  linearProjectMappings: Schema.optionalKey(
+    Schema.Struct({
+      defaultWorkspaceRoot: Schema.optionalKey(Schema.String),
+      mappings: Schema.optionalKey(
+        Schema.Array(
+          Schema.Struct({
+            teamKey: Schema.optionalKey(Schema.String),
+            labelName: Schema.optionalKey(Schema.String),
+            workspaceRoot: Schema.String,
+            baseBranch: Schema.optionalKey(Schema.String),
+          }),
+        ),
+      ),
     }),
   ),
 });

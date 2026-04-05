@@ -7,10 +7,11 @@
  * @module ServerConfig
  */
 import { Effect, FileSystem, Layer, LogLevel, Path, Schema, ServiceMap } from "effect";
+import type { ServerSettingsPatch } from "@t3tools/contracts";
 
 export const DEFAULT_PORT = 3773;
 
-export const RuntimeMode = Schema.Literals(["web", "desktop"]);
+export const RuntimeMode = Schema.Literals(["web", "desktop", "remote"]);
 export type RuntimeMode = typeof RuntimeMode.Type;
 
 /**
@@ -57,6 +58,7 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly authToken: string | undefined;
   readonly autoBootstrapProjectFromCwd: boolean;
   readonly logWebSocketEvents: boolean;
+  readonly linearSettingsOverrides: ServerSettingsPatch["linear"] | undefined;
 }
 
 export const deriveServerPaths = Effect.fn(function* (
@@ -149,6 +151,7 @@ export class ServerConfig extends ServiceMap.Service<ServerConfig, ServerConfigS
           staticDir: undefined,
           devUrl,
           noBrowser: false,
+          linearSettingsOverrides: undefined,
         } satisfies ServerConfigShape;
       }),
     );
