@@ -51,3 +51,7 @@ Docs:
 - Codex-Monitor (Tauri, feature-complete, strong reference implementation): https://github.com/Dimillian/CodexMonitor
 
 Use these as implementation references when designing protocol handling, UX flows, and operational safeguards.
+
+## Delta Log
+
+This is a fork of T3 Code. Any behavior that intentionally differs from upstream must be documented in `docs/t3code-delta-log.md`. When you add or materially change fork-only behavior, add an entry to the delta log before considering the task complete.

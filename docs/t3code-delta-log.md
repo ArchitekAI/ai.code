@@ -36,3 +36,19 @@ For each entry, capture:
   - `apps/web/src/lib/deleteProjectCascade.ts`
   - `apps/web/src/lib/deleteProjectCascade.test.ts`
 - Notes: This was intentionally implemented in the web layer instead of adding a new orchestration command, so it should be easier to preserve across upstream pulls.
+
+### Collapsible project sidebar with Cmd+B keybinding
+
+- Status: Local-only
+- Merge risk: Low
+- User context: The user couldn't collapse the project sidebar on desktop — the toggle button was hidden (`md:hidden`) and no keyboard shortcut existed.
+- Why: The sidebar toggle button is now visible on desktop in the chat header, and `Cmd+B` / `Ctrl+B` toggles the sidebar via the existing keybinding system.
+- Behavior: The `SidebarTrigger` in the sidebar header was removed (toggle lives only in the chat header). A new `sidebar.toggle` keybinding command was added, defaulting to `mod+b`, handled in `AppSidebarLayout.tsx` via a `SidebarKeyboardShortcuts` component inside the left `SidebarProvider`. The `SidebarTrigger` icon now correctly reflects desktop open/collapsed state.
+- Files:
+  - `packages/contracts/src/keybindings.ts` — added `sidebar.toggle` command
+  - `apps/server/src/keybindings.ts` — added `mod+b` default binding
+  - `apps/web/src/components/AppSidebarLayout.tsx` — handles `sidebar.toggle` via keybinding system
+  - `apps/web/src/components/ui/sidebar.tsx` — fixed trigger icon state
+  - `apps/web/src/components/chat/ChatHeader.tsx` — removed `md:hidden` from trigger
+  - `apps/web/src/components/Sidebar.tsx` — removed trigger from sidebar header
+- Notes: The handler lives in `AppSidebarLayout` (not `ChatView`) so it works on all routes, not just when a thread is active. It uses capture-phase event listening so the shortcut works even when the Lexical composer editor has focus. Uses the same keybinding system as `diff.toggle` (`mod+d`), so it supports server-side reconfiguration. The server auto-syncs the new default binding to existing config files on startup.
