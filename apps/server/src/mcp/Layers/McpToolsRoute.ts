@@ -26,7 +26,9 @@ export const mcpToolsRouteLayer = Layer.unwrap(
     const mcpContextRegistry = yield* McpContextRegistry;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const serverConfig = yield* ServerConfig;
+    const services = yield* Effect.services();
     const threadRelationshipRegistry = yield* ThreadRelationshipRegistry;
+    const runPromise = Effect.runPromiseWith(services);
 
     const transports = new Map<
       string,
@@ -104,7 +106,7 @@ export const mcpToolsRouteLayer = Layer.unwrap(
                     input.filePath,
                   );
               const bytes = new Uint8Array(await readFile(resolvedPath));
-              return Effect.runPromise(
+              return runPromise(
                 linearClient.uploadFile({
                   bytes,
                   filename: input.filename?.trim() || path.basename(resolvedPath),
@@ -114,11 +116,11 @@ export const mcpToolsRouteLayer = Layer.unwrap(
               );
             },
             createAgentSessionOnIssue: (issueId, externalLink) =>
-              Effect.runPromise(linearClient.createAgentSessionOnIssue(issueId, externalLink)),
+              runPromise(linearClient.createAgentSessionOnIssue(issueId, externalLink)),
             createAgentSessionOnComment: (commentId, externalLink) =>
-              Effect.runPromise(linearClient.createAgentSessionOnComment(commentId, externalLink)),
+              runPromise(linearClient.createAgentSessionOnComment(commentId, externalLink)),
             createAgentActivity: ({ agentSessionId, body }) =>
-              Effect.runPromise(
+              runPromise(
                 linearClient.createAgentActivity({
                   agentSessionId,
                   content: {
@@ -131,9 +133,9 @@ export const mcpToolsRouteLayer = Layer.unwrap(
                 }),
               ).then(() => undefined),
             createIssueRelation: (input) =>
-              Effect.runPromise(linearClient.createIssueRelation(input)).then(() => undefined),
+              runPromise(linearClient.createIssueRelation(input)).then(() => undefined),
             listChildIssues: (input) =>
-              Effect.runPromise(
+              runPromise(
                 linearClient.listChildIssues({
                   issueId: input.issueId,
                   ...(input.limit !== undefined ? { limit: input.limit } : {}),
@@ -142,11 +144,10 @@ export const mcpToolsRouteLayer = Layer.unwrap(
                     : {}),
                 }),
               ),
-            listAgentSessions: (input) => Effect.runPromise(linearClient.listAgentSessions(input)),
-            getAgentSession: (sessionId) =>
-              Effect.runPromise(linearClient.getAgentSession(sessionId)),
+            listAgentSessions: (input) => runPromise(linearClient.listAgentSessions(input)),
+            getAgentSession: (sessionId) => runPromise(linearClient.getAgentSession(sessionId)),
             onSessionCreated: (childLinearSessionId, childIssueIdentifier) =>
-              Effect.runPromise(
+              runPromise(
                 threadRelationshipRegistry.registerFromMcp({
                   id: randomUUID(),
                   parentThreadId: parentThread.id,
@@ -156,16 +157,14 @@ export const mcpToolsRouteLayer = Layer.unwrap(
                 }),
               ).then(() => undefined),
             onFeedbackDelivery: async (childLinearSessionId, message) => {
-              const relationship = await Effect.runPromise(
+              const relationship = await runPromise(
                 threadRelationshipRegistry.findParentByLinearSession(childLinearSessionId),
               );
               if (relationship._tag === "None" || !relationship.value.childThreadId) {
                 return false;
               }
 
-              const currentSnapshot = await Effect.runPromise(
-                projectionSnapshotQuery.getSnapshot(),
-              );
+              const currentSnapshot = await runPromise(projectionSnapshotQuery.getSnapshot());
               const childThread = currentSnapshot.threads.find(
                 (thread) => thread.id === relationship.value.childThreadId,
               );
@@ -173,7 +172,7 @@ export const mcpToolsRouteLayer = Layer.unwrap(
                 return false;
               }
 
-              await Effect.runPromise(
+              await runPromise(
                 bootstrapTurnService.dispatch({
                   type: "thread.turn.start",
                   commandId: CommandId.makeUnsafe(`server:feedback:${randomUUID()}`),

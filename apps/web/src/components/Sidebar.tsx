@@ -146,6 +146,11 @@ const SIDEBAR_LIST_ANIMATION_OPTIONS = {
   easing: "ease-out",
 } as const;
 
+function looksLikeRepositoryUrl(value: string): boolean {
+  // Let remote users paste either HTTPS or SSH Git remotes into the add-project field.
+  return /^(?:https?:\/\/|ssh:\/\/|git@)/i.test(value) || value.trim().endsWith(".git");
+}
+
 type SidebarProjectSnapshot = Project & {
   expanded: boolean;
 };
@@ -887,23 +892,32 @@ export default function Sidebar() {
         finishAddingProject();
         return;
       }
-
-      const projectId = newProjectId();
-      const createdAt = new Date().toISOString();
-      const title = cwd.split(/[/\\]/).findLast(isNonEmptyString) ?? cwd;
       try {
-        await api.orchestration.dispatchCommand({
-          type: "project.create",
-          commandId: newCommandId(),
-          projectId,
-          title,
-          workspaceRoot: cwd,
-          defaultModelSelection: {
-            provider: "codex",
-            model: DEFAULT_MODEL_BY_PROVIDER.codex,
-          },
-          createdAt,
-        });
+        const projectId = looksLikeRepositoryUrl(cwd)
+          ? (
+              await api.projects.add({
+                repositoryUrl: cwd,
+              })
+            ).projectId
+          : await (async () => {
+              const projectId = newProjectId();
+              const createdAt = new Date().toISOString();
+              const title = cwd.split(/[/\\]/).findLast(isNonEmptyString) ?? cwd;
+
+              await api.orchestration.dispatchCommand({
+                type: "project.create",
+                commandId: newCommandId(),
+                projectId,
+                title,
+                workspaceRoot: cwd,
+                defaultModelSelection: {
+                  provider: "codex",
+                  model: DEFAULT_MODEL_BY_PROVIDER.codex,
+                },
+                createdAt,
+              });
+              return projectId;
+            })();
         await handleNewThread(projectId, {
           envMode: appSettings.defaultThreadEnvMode,
         }).catch(() => undefined);
@@ -2093,7 +2107,7 @@ export default function Sidebar() {
                           ? "border-red-500/70 focus:border-red-500"
                           : "border-border focus:border-ring"
                       }`}
-                      placeholder="/path/to/project"
+                      placeholder="/path/to/project or git URL"
                       value={newCwd}
                       onChange={(event) => {
                         setNewCwd(event.target.value);
