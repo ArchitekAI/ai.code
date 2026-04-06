@@ -243,14 +243,31 @@ const makeLinearActivitySink = Effect.gen(function* () {
   ) {
     const activity = toLinearActivity(event);
     if (!activity) {
+      // Keep a trace of skipped event types so we can debug missing Linear updates.
+      yield* Effect.logInfo("linear activity sink skipped event", {
+        type: event.type,
+      });
       return;
     }
 
     const sessions = yield* sessionRegistry.listByThreadId(activity.threadId);
     const session = latestEntry(sessions);
     if (!session) {
+      // Surface missing thread/session links because they make Linear updates silently disappear.
+      yield* Effect.logWarning("linear activity sink found no linked session", {
+        type: event.type,
+        threadId: activity.threadId,
+      });
       return;
     }
+
+    yield* Effect.logInfo("linear activity sink posting activity", {
+      type: event.type,
+      threadId: activity.threadId,
+      linearSessionId: session.linearSessionId,
+      contentType: activity.content.type,
+      ephemeral: activity.ephemeral,
+    });
 
     yield* linearClient
       .createAgentActivity({
@@ -259,6 +276,14 @@ const makeLinearActivitySink = Effect.gen(function* () {
         ephemeral: activity.ephemeral,
       })
       .pipe(
+        Effect.tap((result) =>
+          Effect.logInfo("linear activity sink posted activity", {
+            type: event.type,
+            threadId: activity.threadId,
+            linearSessionId: session.linearSessionId,
+            activityId: result.activityId,
+          }),
+        ),
         Effect.catch((error) =>
           Effect.logWarning("failed to post Linear activity update", {
             threadId: activity.threadId,

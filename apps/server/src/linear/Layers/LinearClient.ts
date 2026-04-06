@@ -148,6 +148,15 @@ const makeLinearClient = Effect.gen(function* () {
       const agentActivity = payload.agentActivity ? await payload.agentActivity : null;
       return { activityId: payload.success ? (agentActivity?.id ?? "") : "" };
     }).pipe(
+      Effect.tap((result) =>
+        // Capture the SDK response shape so Linear rendering mismatches are easier to debug.
+        Effect.logInfo("linear client createAgentActivity completed", {
+          agentSessionId: input.agentSessionId,
+          contentType: input.content.type,
+          ephemeral: input.ephemeral ?? null,
+          activityId: result.activityId,
+        }),
+      ),
       Effect.flatMap((result) =>
         result.activityId
           ? Effect.succeed(result)
