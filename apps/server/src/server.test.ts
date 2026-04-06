@@ -55,6 +55,7 @@ import {
   BootstrapTurnService,
   type BootstrapTurnServiceShape,
 } from "./orchestration/Services/BootstrapTurnService.ts";
+import { BootstrapTurnServiceLive } from "./orchestration/Layers/BootstrapTurnService.ts";
 import {
   ProjectionSnapshotQuery,
   type ProjectionSnapshotQueryShape,
@@ -70,6 +71,10 @@ import {
   LinearSessionRegistry,
   type LinearSessionRegistryShape,
 } from "./linear/Services/LinearSessionRegistry.ts";
+import {
+  ProjectOnboarding,
+  type ProjectOnboardingShape,
+} from "./project/Services/ProjectOnboarding.ts";
 import {
   McpContextRegistry,
   type McpContextRegistryShape,
@@ -285,6 +290,7 @@ const buildAppUnderTest = (options?: {
     linearOAuth?: Partial<LinearOAuthShape>;
     linearClient?: Partial<LinearClientShape>;
     linearSessionRegistry?: Partial<LinearSessionRegistryShape>;
+    projectOnboarding?: Partial<ProjectOnboardingShape>;
     mcpContextRegistry?: Partial<McpContextRegistryShape>;
     threadRelationshipRegistry?: Partial<ThreadRelationshipRegistryShape>;
     serverLifecycleEvents?: Partial<ServerLifecycleEventsShape>;
@@ -324,195 +330,210 @@ const buildAppUnderTest = (options?: {
       ...options?.config,
     };
     const layerConfig = Layer.succeed(ServerConfig, config);
+    const serverSettingsLayer = Layer.mock(ServerSettingsService)({
+      start: Effect.void,
+      ready: Effect.void,
+      getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
+      updateSettings: () => Effect.succeed(DEFAULT_SERVER_SETTINGS),
+      applyRuntimeOverrides: () => Effect.succeed(DEFAULT_SERVER_SETTINGS),
+      streamChanges: Stream.empty,
+      ...options?.layers?.serverSettings,
+    });
+    const gitCoreLayer = Layer.mock(GitCore)({
+      ...options?.layers?.gitCore,
+    });
+    const projectSetupScriptRunnerLayer = Layer.mock(ProjectSetupScriptRunner)({
+      runForThread: () => Effect.succeed({ status: "no-script" as const }),
+      ...options?.layers?.projectSetupScriptRunner,
+    });
+    const orchestrationEngineLayer = Layer.mock(OrchestrationEngineService)({
+      getReadModel: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
+      readEvents: () => Stream.empty,
+      dispatch: () => Effect.succeed({ sequence: 0 }),
+      streamDomainEvents: Stream.empty,
+      ...options?.layers?.orchestrationEngine,
+    });
+    const mcpContextRegistryLayer = Layer.mock(McpContextRegistry)({
+      register: () => Effect.void,
+      lookup: () => Effect.succeed(Option.none()),
+      remove: () => Effect.void,
+      ...options?.layers?.mcpContextRegistry,
+    });
+    const bootstrapTurnServiceLayer = options?.layers?.bootstrapTurnService
+      ? Layer.mock(BootstrapTurnService)({
+          ...options.layers.bootstrapTurnService,
+        })
+      : BootstrapTurnServiceLive.pipe(
+          Layer.provide(orchestrationEngineLayer),
+          Layer.provide(gitCoreLayer),
+          Layer.provide(projectSetupScriptRunnerLayer),
+          Layer.provide(serverSettingsLayer),
+          Layer.provide(mcpContextRegistryLayer),
+          Layer.provide(layerConfig),
+        );
+
+    const keybindingsLayer = Layer.mock(Keybindings)({
+      streamChanges: Stream.empty,
+      ...options?.layers?.keybindings,
+    });
+    const providerRegistryLayer = Layer.mock(ProviderRegistry)({
+      getProviders: Effect.succeed([]),
+      refresh: () => Effect.succeed([]),
+      streamChanges: Stream.empty,
+      ...options?.layers?.providerRegistry,
+    });
+    const openLayer = Layer.mock(Open)({
+      ...options?.layers?.open,
+    });
+    const gitManagerLayer = Layer.mock(GitManager)({
+      ...options?.layers?.gitManager,
+    });
+    const terminalManagerLayer = Layer.mock(TerminalManager)({
+      ...options?.layers?.terminalManager,
+    });
+    const projectionSnapshotQueryLayer = Layer.mock(ProjectionSnapshotQuery)({
+      getSnapshot: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
+      ...options?.layers?.projectionSnapshotQuery,
+    });
+    const checkpointDiffQueryLayer = Layer.mock(CheckpointDiffQuery)({
+      getTurnDiff: () =>
+        Effect.succeed({
+          threadId: defaultThreadId,
+          fromTurnCount: 0,
+          toTurnCount: 0,
+          diff: "",
+        }),
+      getFullThreadDiff: () =>
+        Effect.succeed({
+          threadId: defaultThreadId,
+          fromTurnCount: 0,
+          toTurnCount: 0,
+          diff: "",
+        }),
+      ...options?.layers?.checkpointDiffQuery,
+    });
+    const browserTraceCollectorLayer = Layer.mock(BrowserTraceCollector)({
+      record: () => Effect.void,
+      ...options?.layers?.browserTraceCollector,
+    });
+    const linearWebhookHandlerLayer = Layer.mock(LinearWebhookHandler)({
+      handleWebhook: () => Effect.void,
+      ...options?.layers?.linearWebhookHandler,
+    });
+    const linearOAuthLayer = Layer.mock(LinearOAuth)({
+      buildAuthorizationUrl: Effect.succeed({ url: "https://linear.app/oauth/authorize" }),
+      completeAuthorizationCodeFlow: () => Effect.die("unused"),
+      getAccessToken: Effect.succeed(null),
+      refreshWorkspaceToken: () => Effect.die("unused"),
+      ...options?.layers?.linearOAuth,
+    });
+    const linearClientLayer = Layer.mock(LinearClient)({
+      createAgentActivity: () => Effect.succeed({ activityId: "activity-1" }),
+      fetchIssue: () => Effect.die("unused"),
+      fetchIssueComments: () => Effect.succeed([]),
+      fetchIssueState: () => Effect.die("unused"),
+      uploadFile: () => Effect.die("unused"),
+      createAgentSessionOnIssue: () => Effect.die("unused"),
+      createAgentSessionOnComment: () => Effect.die("unused"),
+      listAgentSessions: () => Effect.succeed([]),
+      getAgentSession: () => Effect.die("unused"),
+      createIssueRelation: () => Effect.void,
+      listChildIssues: () => Effect.succeed([]),
+      ...options?.layers?.linearClient,
+    });
+    const linearSessionRegistryLayer = Layer.mock(LinearSessionRegistry)({
+      register: () => Effect.void,
+      lookupBySessionId: () => Effect.succeed(Option.none()),
+      listByThreadId: () => Effect.succeed([]),
+      listByIssueId: () => Effect.succeed([]),
+      remove: () => Effect.void,
+      removeByIssueId: () => Effect.void,
+      ...options?.layers?.linearSessionRegistry,
+    });
+    const projectOnboardingLayer = Layer.mock(ProjectOnboarding)({
+      addRepository: () =>
+        Effect.succeed({
+          projectId: defaultProjectId,
+          title: "Default Project",
+          workspaceRoot: "/tmp/default-project",
+          baseBranch: "main",
+          cloned: false,
+          mappingAdded: false,
+          projectCreated: false,
+        }),
+      ensureProjectForWorkspaceRoot: (workspaceRoot) =>
+        Effect.succeed({
+          projectId: defaultProjectId,
+          projectCreated: false,
+          title: "Default Project",
+          workspaceRoot,
+          defaultModelSelection,
+        }),
+      ...options?.layers?.projectOnboarding,
+    });
+    const threadRelationshipRegistryLayer = Layer.mock(ThreadRelationshipRegistry)({
+      registerFromMcp: () => Effect.void,
+      attachChildThread: () => Effect.void,
+      listChildren: () => Effect.succeed([]),
+      findParent: () => Effect.succeed(Option.none()),
+      findParentByLinearSession: () => Effect.succeed(Option.none()),
+      markResumed: () => Effect.succeed(true),
+      updateChildWorktree: () => Effect.void,
+      remove: () => Effect.void,
+      ...options?.layers?.threadRelationshipRegistry,
+    });
+    const serverLifecycleEventsLayer = Layer.mock(ServerLifecycleEvents)({
+      publish: (event) => Effect.succeed({ ...(event as any), sequence: 1 }),
+      snapshot: Effect.succeed({ sequence: 0, events: [] }),
+      stream: Stream.empty,
+      ...options?.layers?.serverLifecycleEvents,
+    });
+    const serverRuntimeStartupLayer = Layer.mock(ServerRuntimeStartup)({
+      awaitCommandReady: Effect.void,
+      markHttpListening: Effect.void,
+      enqueueCommand: (effect) => effect,
+      ...options?.layers?.serverRuntimeStartup,
+    });
+
+    const testRuntimeSupportLayer = Layer.mergeAll(
+      layerConfig,
+      serverSettingsLayer,
+      gitCoreLayer,
+      projectSetupScriptRunnerLayer,
+      orchestrationEngineLayer,
+      mcpContextRegistryLayer,
+      workspaceAndProjectServicesLayer,
+      bootstrapTurnServiceLayer,
+    );
+
+    const testMockServicesLayer = Layer.mergeAll(
+      // Group mocks so the test harness mirrors production without blowing Layer overload limits.
+      keybindingsLayer,
+      providerRegistryLayer,
+      openLayer,
+      gitManagerLayer,
+      terminalManagerLayer,
+      projectionSnapshotQueryLayer,
+      checkpointDiffQueryLayer,
+      browserTraceCollectorLayer,
+      linearWebhookHandlerLayer,
+      linearOAuthLayer,
+      linearClientLayer,
+      linearSessionRegistryLayer,
+      projectOnboardingLayer,
+      threadRelationshipRegistryLayer,
+      serverLifecycleEventsLayer,
+      serverRuntimeStartupLayer,
+    );
 
     const appLayer = HttpRouter.serve(makeRoutesLayer, {
       disableListenLog: true,
       disableLogger: true,
-    })
-      .pipe(
-        Layer.provide(
-          Layer.mock(Keybindings)({
-            streamChanges: Stream.empty,
-            ...options?.layers?.keybindings,
-          }),
-        ),
-        Layer.provide(
-          Layer.mock(ProviderRegistry)({
-            getProviders: Effect.succeed([]),
-            refresh: () => Effect.succeed([]),
-            streamChanges: Stream.empty,
-            ...options?.layers?.providerRegistry,
-          }),
-        ),
-        Layer.provide(
-          Layer.mock(ServerSettingsService)({
-            start: Effect.void,
-            ready: Effect.void,
-            getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
-            updateSettings: () => Effect.succeed(DEFAULT_SERVER_SETTINGS),
-            applyRuntimeOverrides: () => Effect.succeed(DEFAULT_SERVER_SETTINGS),
-            streamChanges: Stream.empty,
-            ...options?.layers?.serverSettings,
-          }),
-        ),
-        Layer.provide(
-          Layer.mock(Open)({
-            ...options?.layers?.open,
-          }),
-        ),
-        Layer.provide(
-          Layer.mock(GitCore)({
-            ...options?.layers?.gitCore,
-          }),
-        ),
-        Layer.provide(
-          Layer.mock(GitManager)({
-            ...options?.layers?.gitManager,
-          }),
-        ),
-        Layer.provide(
-          Layer.mock(ProjectSetupScriptRunner)({
-            runForThread: () => Effect.succeed({ status: "no-script" as const }),
-            ...options?.layers?.projectSetupScriptRunner,
-          }),
-        ),
-        Layer.provide(
-          Layer.mock(TerminalManager)({
-            ...options?.layers?.terminalManager,
-          }),
-        ),
-        Layer.provide(
-          Layer.mock(OrchestrationEngineService)({
-            getReadModel: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
-            readEvents: () => Stream.empty,
-            dispatch: () => Effect.succeed({ sequence: 0 }),
-            streamDomainEvents: Stream.empty,
-            ...options?.layers?.orchestrationEngine,
-          }),
-        ),
-        Layer.provide(
-          Layer.mock(BootstrapTurnService)({
-            // Tests only need routing to succeed, not the real bootstrap orchestration path.
-            dispatch: () => Effect.succeed({ sequence: 0 }),
-            ...options?.layers?.bootstrapTurnService,
-          }),
-        ),
-        Layer.provide(
-          Layer.mock(ProjectionSnapshotQuery)({
-            getSnapshot: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
-            ...options?.layers?.projectionSnapshotQuery,
-          }),
-        ),
-        Layer.provide(
-          Layer.mock(CheckpointDiffQuery)({
-            getTurnDiff: () =>
-              Effect.succeed({
-                threadId: defaultThreadId,
-                fromTurnCount: 0,
-                toTurnCount: 0,
-                diff: "",
-              }),
-            getFullThreadDiff: () =>
-              Effect.succeed({
-                threadId: defaultThreadId,
-                fromTurnCount: 0,
-                toTurnCount: 0,
-                diff: "",
-              }),
-            ...options?.layers?.checkpointDiffQuery,
-          }),
-        ),
-        Layer.provide(
-          Layer.mock(BrowserTraceCollector)({
-            record: () => Effect.void,
-            ...options?.layers?.browserTraceCollector,
-          }),
-        ),
-      )
-      .pipe(
-        Layer.provide(
-          Layer.mock(LinearWebhookHandler)({
-            handleWebhook: () => Effect.void,
-            ...options?.layers?.linearWebhookHandler,
-          }),
-        ),
-        Layer.provide(
-          Layer.mock(LinearOAuth)({
-            buildAuthorizationUrl: Effect.succeed({ url: "https://linear.app/oauth/authorize" }),
-            completeAuthorizationCodeFlow: () => Effect.die("unused"),
-            getAccessToken: Effect.succeed(null),
-            refreshWorkspaceToken: () => Effect.die("unused"),
-            ...options?.layers?.linearOAuth,
-          }),
-        ),
-        Layer.provide(
-          Layer.mock(LinearClient)({
-            createAgentActivity: () => Effect.succeed({ activityId: "activity-1" }),
-            fetchIssue: () => Effect.die("unused"),
-            fetchIssueComments: () => Effect.succeed([]),
-            fetchIssueState: () => Effect.die("unused"),
-            uploadFile: () => Effect.die("unused"),
-            createAgentSessionOnIssue: () => Effect.die("unused"),
-            createAgentSessionOnComment: () => Effect.die("unused"),
-            listAgentSessions: () => Effect.succeed([]),
-            getAgentSession: () => Effect.die("unused"),
-            createIssueRelation: () => Effect.void,
-            listChildIssues: () => Effect.succeed([]),
-            ...options?.layers?.linearClient,
-          }),
-        ),
-        Layer.provide(
-          Layer.mock(LinearSessionRegistry)({
-            register: () => Effect.void,
-            lookupBySessionId: () => Effect.succeed(Option.none()),
-            listByThreadId: () => Effect.succeed([]),
-            listByIssueId: () => Effect.succeed([]),
-            remove: () => Effect.void,
-            removeByIssueId: () => Effect.void,
-            ...options?.layers?.linearSessionRegistry,
-          }),
-        ),
-        Layer.provide(
-          Layer.mock(McpContextRegistry)({
-            register: () => Effect.void,
-            lookup: () => Effect.succeed(Option.none()),
-            remove: () => Effect.void,
-            ...options?.layers?.mcpContextRegistry,
-          }),
-        ),
-        Layer.provide(
-          Layer.mock(ThreadRelationshipRegistry)({
-            registerFromMcp: () => Effect.void,
-            attachChildThread: () => Effect.void,
-            listChildren: () => Effect.succeed([]),
-            findParent: () => Effect.succeed(Option.none()),
-            findParentByLinearSession: () => Effect.succeed(Option.none()),
-            markResumed: () => Effect.succeed(true),
-            updateChildWorktree: () => Effect.void,
-            remove: () => Effect.void,
-            ...options?.layers?.threadRelationshipRegistry,
-          }),
-        ),
-        Layer.provide(
-          Layer.mock(ServerLifecycleEvents)({
-            publish: (event) => Effect.succeed({ ...(event as any), sequence: 1 }),
-            snapshot: Effect.succeed({ sequence: 0, events: [] }),
-            stream: Stream.empty,
-            ...options?.layers?.serverLifecycleEvents,
-          }),
-        ),
-        Layer.provide(
-          Layer.mock(ServerRuntimeStartup)({
-            awaitCommandReady: Effect.void,
-            markHttpListening: Effect.void,
-            enqueueCommand: (effect) => effect,
-            ...options?.layers?.serverRuntimeStartup,
-          }),
-        ),
-        Layer.provide(workspaceAndProjectServicesLayer),
-        Layer.provideMerge(FetchHttpClient.layer),
-        Layer.provide(layerConfig),
-      );
+    }).pipe(
+      Layer.provide(testMockServicesLayer),
+      Layer.provide(testRuntimeSupportLayer),
+      Layer.provideMerge(FetchHttpClient.layer),
+    );
 
     yield* Layer.build(appLayer);
     return config;
@@ -1324,6 +1345,46 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.isAtLeast(response.entries.length, 1);
       assert.isTrue(response.entries.some((entry) => entry.path === "needle-file.ts"));
       assert.equal(response.truncated, false);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("routes websocket rpc projects.add", () =>
+    Effect.gen(function* () {
+      let receivedRepositoryUrl: string | null = null;
+
+      yield* buildAppUnderTest({
+        layers: {
+          projectOnboarding: {
+            addRepository: (input) =>
+              Effect.sync(() => {
+                receivedRepositoryUrl = input.repositoryUrl;
+                return {
+                  projectId: ProjectId.makeUnsafe("project-added"),
+                  title: "ai.code",
+                  workspaceRoot: "/tmp/repos/ai.code",
+                  baseBranch: "main",
+                  cloned: true,
+                  mappingAdded: true,
+                  projectCreated: true,
+                };
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const response = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.projectsAdd]({
+            repositoryUrl: "https://github.com/ArchitekAI/ai.code.git",
+          }),
+        ),
+      );
+
+      assert.equal(receivedRepositoryUrl, "https://github.com/ArchitekAI/ai.code.git");
+      assert.equal(response.workspaceRoot, "/tmp/repos/ai.code");
+      assert.equal(response.baseBranch, "main");
+      assert.equal(response.projectCreated, true);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

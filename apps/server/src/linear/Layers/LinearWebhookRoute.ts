@@ -29,16 +29,6 @@ const makeLinearWebhookRoute = (path: "/webhook" | "/webhook/linear") =>
       const timestamp = getHeader(headers, LINEAR_WEBHOOK_TS_HEADER);
       const authorization = getHeader(headers, "authorization");
 
-      // Log every delivery attempt so self-hosted debugging can confirm whether
-      // Linear is reaching the server before payload handling succeeds.
-      yield* Effect.logInfo("linear webhook request received", {
-        path,
-        contentLength: rawBody.byteLength,
-        hasSignature: !!signature,
-        hasTimestamp: !!timestamp,
-        hasAuthorization: !!authorization,
-      });
-
       return yield* linearWebhookHandler
         .handleWebhook({
           rawBody,
@@ -47,11 +37,6 @@ const makeLinearWebhookRoute = (path: "/webhook" | "/webhook/linear") =>
           authorization,
         })
         .pipe(
-          Effect.tap(() =>
-            Effect.logInfo("linear webhook processed successfully", {
-              path,
-            }),
-          ),
           Effect.as(HttpServerResponse.empty({ status: 200 })),
           Effect.catch((error) => {
             if (Schema.is(LinearWebhookVerificationError)(error)) {

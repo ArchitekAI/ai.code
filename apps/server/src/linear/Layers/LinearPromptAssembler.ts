@@ -156,6 +156,15 @@ function shouldAppendTodoExtension(promptType: PromptType): boolean {
   );
 }
 
+function shouldAppendVerifyAndShipExtension(promptType: PromptType): boolean {
+  return (
+    promptType === "builder" ||
+    promptType === "debugger" ||
+    promptType === "orchestrator" ||
+    promptType === "graphite-orchestrator"
+  );
+}
+
 function promptAssetCandidates(filename: string): ReadonlyArray<string> {
   return [
     // Source-mode and unbundled builds keep prompts one directory above the layer.
@@ -273,25 +282,53 @@ const makeLinearPromptAssembler = Effect.gen(function* () {
     );
 
     if (!shouldAppendTodoExtension(promptType)) {
-      return promptTemplate;
+      if (!shouldAppendVerifyAndShipExtension(promptType)) {
+        return promptTemplate;
+      }
     }
 
-    const todoExtensionPath = yield* resolvePromptAssetPath(
-      "todolist-system-prompt-extension.md",
-      "Failed to load shared Linear todo instructions.",
+    let enrichedPrompt = promptTemplate.trimEnd();
+
+    if (shouldAppendTodoExtension(promptType)) {
+      const todoExtensionPath = yield* resolvePromptAssetPath(
+        "todolist-system-prompt-extension.md",
+        "Failed to load shared Linear todo instructions.",
+      );
+      const todoExtension = yield* fileSystem.readFileString(todoExtensionPath).pipe(
+        Effect.mapError(
+          (cause) =>
+            new LinearWebhookHandlerError({
+              detail: "Failed to read shared Linear todo instructions.",
+              cause,
+            }),
+        ),
+      );
+
+      // Keep the shared planning instructions colocated with the prompt type that needs them.
+      enrichedPrompt = `${enrichedPrompt}\n\n${todoExtension.trim()}`;
+    }
+
+    if (!shouldAppendVerifyAndShipExtension(promptType)) {
+      return `${enrichedPrompt}\n`;
+    }
+
+    const workflowExtensionPath = yield* resolvePromptAssetPath(
+      "verify-and-ship-system-prompt-extension.md",
+      "Failed to load shared Linear verify-and-ship instructions.",
     );
-    const todoExtension = yield* fileSystem.readFileString(todoExtensionPath).pipe(
+    const workflowExtension = yield* fileSystem.readFileString(workflowExtensionPath).pipe(
       Effect.mapError(
         (cause) =>
           new LinearWebhookHandlerError({
-            detail: "Failed to read shared Linear todo instructions.",
+            detail: "Failed to read shared Linear verify-and-ship instructions.",
             cause,
           }),
       ),
     );
 
-    // Keep the shared planning instructions colocated with the prompt type that needs them.
-    return `${promptTemplate.trimEnd()}\n\n${todoExtension.trim()}\n`;
+    // Mirror Cyrus by keeping shipping/final-summary requirements in a shared
+    // prompt extension rather than re-copying the workflow into each template.
+    return `${enrichedPrompt}\n\n${workflowExtension.trim()}\n`;
   });
 
   const readStandardIssuePromptTemplate = Effect.gen(function* () {

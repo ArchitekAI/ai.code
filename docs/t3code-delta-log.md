@@ -22,7 +22,75 @@ For each entry, capture:
 
 ## Active Deltas
 
+## 2026-04-06
+
+### Cyrus-style Linear session completion guidance and stop responses
+
+- Status: Local-only
+- Merge risk: Medium
+- User context: The user wanted the Linear agent flow to behave much more like Cyrus, especially around orchestration discipline, final responses in Linear, and PR creation before an agent session ends.
+- Why: This fork now adds explicit Linear response activities for stop/terminal session exits and appends shared verify-and-ship guidance to the Linear system prompts so code-changing sessions are pushed toward verification, PR creation, and a final Linear-ready summary.
+- Behavior:
+  - Prompted stop requests, terminal workflow-state transitions, and unassignment now post a durable Linear `response` activity before the thread is interrupted and stopped.
+  - Completed Linear-backed turns now run through a backend completion reactor that inspects git state, performs `commit_push_pr` or `create_pr` when needed, and posts a single durable final `response` activity that includes the PR URL.
+  - The completion reactor now treats both `ready` and `stopped` Linear sessions as valid completion candidates so fast session teardown still gets the same shipping and final-response behavior Cyrus enforces with its stop hook.
+  - Builder, debugger, orchestrator, and graphite-orchestrator prompts now include a shared workflow extension that requires acceptance-criteria validation, project checks, PR creation or update, and a concise final summary when code changes are made.
+  - Orchestrator prompts now explicitly treat shipping and PR status as part of verification, not optional follow-up.
+- Files:
+  - `apps/server/src/linear/Layers/LinearWebhookHandler.ts`
+  - `apps/server/src/linear/Layers/LinearSessionCompletionReactor.ts`
+  - `apps/server/src/linear/Layers/LinearSessionCompletionReactor.test.ts`
+  - `apps/server/src/linear/Layers/LinearPromptAssembler.ts`
+  - `apps/server/src/orchestration/Layers/OrchestrationReactor.ts`
+  - `apps/server/src/linear/Layers/LinearWebhookHandler.test.ts`
+  - `apps/server/src/linear/prompts/builder.md`
+  - `apps/server/src/linear/prompts/orchestrator.md`
+  - `apps/server/src/linear/prompts/graphite-orchestrator.md`
+  - `apps/server/src/linear/prompts/verify-and-ship-system-prompt-extension.md`
+- Notes: This still does not fully reproduce Cyrus stop-hook enforcement because the current provider stack does not expose the same stop-hook mechanism. The fork now matches Cyrus more closely through explicit Linear lifecycle responses and stronger prompt-level shipping requirements.
+
+### Linear agent timeline defaults to durable entries instead of ephemeral replacements
+
+- Status: Local-only
+- Merge risk: Medium
+- User context: The user noticed that Linear agent updates were replacing the previous activity instead of building a readable execution log, making it hard to follow what the agent had done.
+- Why: Cyrus only uses ephemeral Linear activities for short-lived status banners like "Analyzing your request…" and keeps the actual work log durable. This fork now follows that model so Linear shows a running history instead of a single constantly replaced item.
+- Behavior:
+  - Tool progress, task progress, approvals, warnings, plan updates, user-input waits, and diff summaries now post as durable activities.
+  - `thread.turn-start-requested` still uses an ephemeral "Starting work..." status, preserving the transient banner behavior Cyrus uses for session startup.
+- Files:
+  - `apps/server/src/linear/Layers/LinearActivitySink.ts`
+  - `apps/server/src/linear/Layers/LinearActivitySink.test.ts`
+- Notes: Upstream merges touching Linear activity projection should be reviewed carefully, because the ephemeral policy now intentionally mirrors Cyrus rather than the fork's earlier "replace the last item" behavior.
+
 ## 2026-04-05
+
+### Managed repo onboarding writes Linear routing settings and creates T3 projects
+
+- Status: Local-only
+- Merge risk: Medium
+- User context: The user wanted Cyrus-style repo onboarding parity, but with one fork-specific twist: once a repo is cloned and registered for Linear routing, it should also appear as a normal T3 Code project automatically.
+- Why: Upstream `t3code` does not have a managed repo onboarding flow. This fork now lets the server clone a Git repo, detect its base branch, persist the Linear routing/base-branch metadata in settings, and create the corresponding T3 project in one operation.
+- Behavior:
+  - `projects.add` is now a first-class websocket RPC for onboarding Git repositories.
+  - The onboarding flow clones repos into the managed server repo directory, detects the default remote base branch, and persists or updates the matching `linearProjectMappings` entry in server settings.
+  - Adding a repository now also ensures a T3 project exists for that checkout, so the repo becomes available in both Linear routing and the normal T3 project list immediately.
+  - The sidebar add-project entry now accepts either a local workspace path or a Git repository URL; Git URLs take the managed onboarding path instead of the local `project.create` shortcut.
+- Files:
+  - `packages/contracts/src/project.ts`
+  - `packages/contracts/src/ipc.ts`
+  - `packages/contracts/src/rpc.ts`
+  - `apps/server/src/project/Services/ProjectOnboarding.ts`
+  - `apps/server/src/project/Layers/ProjectOnboarding.ts`
+  - `apps/server/src/server.ts`
+  - `apps/server/src/ws.ts`
+  - `apps/server/src/linear/Layers/LinearWebhookHandler.ts`
+  - `apps/server/src/server.test.ts`
+  - `apps/web/src/wsRpcClient.ts`
+  - `apps/web/src/wsNativeApi.ts`
+  - `apps/web/src/wsNativeApi.test.ts`
+  - `apps/web/src/components/Sidebar.tsx`
+- Notes: Repo availability is still settings-driven rather than DB-driven, so this is parity with Cyrus’s managed config model, not a replacement for it. Future upstream merges touching project creation, workspace routing, or sidebar add-project UX will need a careful review.
 
 ### Cyrus-style Linear OAuth self-hosting flow
 
@@ -101,6 +169,7 @@ For each entry, capture:
   - New Linear sessions build an enriched prompt from issue metadata, comment threads, repository/worktree context, and optional Linear agent guidance instead of sending only the bare issue description.
   - Linear label selection chooses a fork-local system prompt template (`builder`, `debugger`, `orchestrator`) modeled after Cyrus. The selected prompt prefix is threaded through the provider turn flow for both Codex and Claude-backed sessions.
   - Linear-triggered worktrees now receive Linear MCP configuration on disk so the agent can query and update Linear from inside the session. The config is mirrored to both `.mcp.json` and `.codex/mcp.json` so Claude-style and Codex-style project config discovery both work.
+  - When Linear issue metadata cannot be routed to a configured repository, the webhook handler now mirrors Cyrus by posting a `select` agent activity asking which repository to use and defers thread bootstrap until the follow-up `agentSessionPrompted` webhook arrives.
   - Linear activity syncing now forwards structured orchestration activity updates, richer session lifecycle messages, and diff stats instead of only sparse start/finish events.
   - Linear `Issue` update webhooks now stop active sessions when an issue reaches a terminal state and send a follow-up turn when the issue title or description changes mid-flight.
 - Files:

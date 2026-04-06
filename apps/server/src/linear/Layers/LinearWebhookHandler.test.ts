@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   DEFAULT_SERVER_SETTINGS,
+  type LinearProjectMapping,
   type LinearSessionRow,
   type OrchestrationCommand,
   type OrchestrationReadModel,
@@ -17,7 +18,12 @@ import { ServerRuntimeStartup } from "../../serverRuntimeStartup.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ThreadRelationshipRegistry } from "../../mcp/Services/ThreadRelationshipRegistry.ts";
 import { ToolPolicyResolver } from "../../provider/Services/ToolPolicyResolver.ts";
-import { LinearClient, type LinearIssueDetails } from "../Services/LinearClient.ts";
+import { ProjectOnboarding } from "../../project/Services/ProjectOnboarding.ts";
+import {
+  LinearClient,
+  type LinearAgentActivityInput,
+  type LinearIssueDetails,
+} from "../Services/LinearClient.ts";
 import { LinearPromptAssembler } from "../Services/LinearPromptAssembler.ts";
 import { LinearSessionRegistry } from "../Services/LinearSessionRegistry.ts";
 import { LinearWebhookHandler } from "../Services/LinearWebhookHandler.ts";
@@ -124,13 +130,13 @@ const makeCreatedPayloadWithNullables = (linearSessionId: string) => ({
   ],
 });
 
-const makePromptedPayload = (body: string) => ({
+const makePromptedPayload = (body: string, linearSessionId = "linear-session-active") => ({
   type: "AgentSessionEvent" as const,
   action: "prompted" as const,
   createdAt: now,
   organizationId: "org-linear",
   agentSession: {
-    id: "linear-session-active",
+    id: linearSessionId,
     issueId: "issue-1",
     creator: {
       id: "user-2",
@@ -179,6 +185,24 @@ const makeIssueUpdatePayload = (input: {
   updatedFrom: input.updatedFrom,
 });
 
+const makeUnassignedPayload = () => ({
+  type: "AppUserNotification" as const,
+  action: "issueUnassignedFromYou" as const,
+  createdAt: now,
+  organizationId: "org-linear",
+  notification: {
+    type: "issueUnassignedFromYou" as const,
+    issueId: "issue-1",
+    issue: {
+      id: "issue-1",
+      identifier: "ENG-1",
+      title: "Fix Linear webhook parity",
+      description: "Port the Linear webhook behavior cleanly.",
+      team: { key: "ENG" },
+    },
+  },
+});
+
 const defaultIssueDetails: LinearIssueDetails = {
   id: "issue-1",
   identifier: "ENG-1",
@@ -210,8 +234,11 @@ const makeHandlerLayer = (input: {
     readonly name: string;
     readonly type?: string;
   };
+  readonly mappings?: ReadonlyArray<LinearProjectMapping>;
+  readonly defaultWorkspaceRoot?: string;
 }) => {
   const commands: Array<OrchestrationCommand> = [];
+  const createdAgentActivities: Array<LinearAgentActivityInput> = [];
   const removedSessionIds: Array<string> = [];
   const registeredSessions: Array<LinearSessionRow> = [];
   const issueSessions = [...(input.issueSessions ?? [])];
@@ -234,13 +261,15 @@ const makeHandlerLayer = (input: {
     },
     linearProjectMappings: {
       mappings: [
-        {
-          teamKey: "ENG",
-          workspaceRoot: "/tmp/linear-project",
-          baseBranch: "main",
-        },
+        ...(input.mappings ?? [
+          {
+            teamKey: "ENG",
+            workspaceRoot: "/tmp/linear-project",
+            baseBranch: "main",
+          },
+        ]),
       ],
-      defaultWorkspaceRoot: "",
+      defaultWorkspaceRoot: input.defaultWorkspaceRoot ?? "",
     },
   };
 
@@ -277,8 +306,13 @@ const makeHandlerLayer = (input: {
         getSnapshot: () => Effect.succeed(input.readModel),
         getCounts: () =>
           Effect.succeed({ projectCount: 1, threadCount: input.readModel.threads.length }),
-        getActiveProjectByWorkspaceRoot: () =>
-          Effect.succeed(Option.some(input.readModel.projects[0]!)),
+        getActiveProjectByWorkspaceRoot: (workspaceRoot) =>
+          Effect.sync(() => {
+            const project =
+              input.readModel.projects.find((entry) => entry.workspaceRoot === workspaceRoot) ??
+              null;
+            return project === null ? Option.none() : Option.some(project);
+          }),
         getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
       }),
@@ -295,7 +329,8 @@ const makeHandlerLayer = (input: {
           ),
         listByThreadId: (threadId) =>
           Effect.succeed(issueSessions.filter((session) => session.threadId === threadId)),
-        listByIssueId: () => Effect.succeed(issueSessions),
+        listByIssueId: (issueId) =>
+          Effect.succeed(issueSessions.filter((session) => session.issueId === issueId)),
         remove: (linearSessionId) =>
           Effect.sync(() => {
             removedSessionIds.push(linearSessionId);
@@ -313,7 +348,11 @@ const makeHandlerLayer = (input: {
     ),
     Layer.provideMerge(
       Layer.mock(LinearClient)({
-        createAgentActivity: () => Effect.die("unused"),
+        createAgentActivity: (activity) =>
+          Effect.sync(() => {
+            createdAgentActivities.push(activity);
+            return { activityId: `activity-${createdAgentActivities.length}` };
+          }),
         fetchIssue: () => Effect.succeed(issueDetails),
         fetchIssueComments: () => Effect.succeed(issueComments),
         fetchIssueState: () => Effect.succeed(issueState),
@@ -359,10 +398,24 @@ const makeHandlerLayer = (input: {
         resolve: () => Effect.succeed({}),
       }),
     ),
+    Layer.provideMerge(
+      Layer.mock(ProjectOnboarding)({
+        addRepository: () => Effect.die("unused"),
+        ensureProjectForWorkspaceRoot: (workspaceRoot) =>
+          Effect.succeed({
+            projectId: defaultProjectId,
+            projectCreated: false,
+            title: "Linear Project",
+            workspaceRoot,
+            defaultModelSelection,
+          }),
+      }),
+    ),
   );
 
   return {
     commands,
+    createdAgentActivities,
     removedSessionIds,
     registeredSessions,
     layer,
@@ -376,6 +429,20 @@ const runWebhook = (layer: Layer.Layer<LinearWebhookHandler>, payload: Record<st
       rawBody: new TextEncoder().encode(JSON.stringify(payload)),
       authorization: "Bearer linear-secret",
     });
+  }).pipe(Effect.provide(layer));
+
+const runWebhookSequence = (
+  layer: Layer.Layer<LinearWebhookHandler>,
+  payloads: ReadonlyArray<Record<string, unknown>>,
+) =>
+  Effect.gen(function* () {
+    const handler = yield* LinearWebhookHandler;
+    for (const payload of payloads) {
+      yield* handler.handleWebhook({
+        rawBody: new TextEncoder().encode(JSON.stringify(payload)),
+        authorization: "Bearer linear-secret",
+      });
+    }
   }).pipe(Effect.provide(layer));
 
 it.layer(NodeServices.layer)("linear webhook handler", (it) => {
@@ -485,6 +552,160 @@ it.layer(NodeServices.layer)("linear webhook handler", (it) => {
     }),
   );
 
+  it.effect("asks the user which repository to use when configured mappings do not match", () =>
+    Effect.gen(function* () {
+      const harness = makeHandlerLayer({
+        readModel: makeReadModel([]),
+        mappings: [
+          {
+            workspaceRoot: "/tmp/frontend",
+            routeKey: "frontend",
+            teamKey: "ENG",
+          },
+          {
+            workspaceRoot: "/tmp/backend",
+            routeKey: "backend",
+            teamKey: "ENG",
+          },
+        ],
+      });
+
+      yield* runWebhook(harness.layer, makeCreatedPayload("linear-session-select"));
+
+      assert.equal(harness.commands.length, 0);
+      assert.equal(harness.createdAgentActivities.length, 1);
+      assert.deepEqual(harness.createdAgentActivities[0], {
+        agentSessionId: "linear-session-select",
+        content: {
+          type: "elicitation",
+          body: "Which repository should I work in for this issue?",
+        },
+        signal: "select",
+        signalMetadata: {
+          options: [{ value: "frontend" }, { value: "backend" }],
+        },
+      });
+      assert.equal(harness.registeredSessions.length, 0);
+    }),
+  );
+
+  it.effect("includes the default workspace root as a selectable repository", () =>
+    Effect.gen(function* () {
+      const harness = makeHandlerLayer({
+        readModel: makeReadModel([]),
+        mappings: [
+          {
+            workspaceRoot: "/tmp/hello-world",
+            routeKey: "hello-world",
+            teamKey: "ENG",
+          },
+        ],
+        defaultWorkspaceRoot: "/tmp/ai.code",
+      });
+
+      yield* runWebhook(harness.layer, makeCreatedPayload("linear-session-select-default"));
+
+      assert.equal(harness.commands.length, 0);
+      assert.deepEqual(harness.createdAgentActivities, [
+        {
+          agentSessionId: "linear-session-select-default",
+          content: {
+            type: "elicitation",
+            body: "Which repository should I work in for this issue?",
+          },
+          signal: "select",
+          signalMetadata: {
+            options: [{ value: "hello-world" }, { value: "ai.code" }],
+          },
+        },
+      ]);
+    }),
+  );
+
+  it.effect("uses the prompted repository selection to bootstrap the chosen repo", () =>
+    Effect.gen(function* () {
+      const harness = makeHandlerLayer({
+        readModel: makeReadModel([]),
+        mappings: [
+          {
+            workspaceRoot: "/tmp/frontend",
+            routeKey: "frontend",
+            teamKey: "ENG",
+            baseBranch: "main",
+          },
+          {
+            workspaceRoot: "/tmp/backend",
+            routeKey: "backend",
+            teamKey: "ENG",
+            baseBranch: "develop",
+          },
+        ],
+      });
+
+      yield* runWebhookSequence(harness.layer, [
+        makeCreatedPayload("linear-session-select"),
+        makePromptedPayload("backend", "linear-session-select"),
+      ]);
+
+      assert.equal(harness.createdAgentActivities.length, 1);
+      assert.equal(harness.commands.length, 1);
+      const command = harness.commands.find((entry) => entry.type === "thread.turn.start");
+      if (command?.type !== "thread.turn.start" || !command.bootstrap?.prepareWorktree) {
+        throw new Error("Expected thread.turn.start command with prepareWorktree");
+      }
+
+      assert.equal(command.bootstrap.prepareWorktree.projectCwd, "/tmp/backend");
+      assert.equal(command.bootstrap.prepareWorktree.baseBranch, "develop");
+      assert.equal(
+        command.message.text,
+        "new-session:ENG-1:/tmp/backend/feature/eng-1-fix-linear-webhook-parity",
+      );
+      assert.equal(harness.registeredSessions[0]?.linearSessionId, "linear-session-select");
+    }),
+  );
+
+  it.effect(
+    "falls back to the first configured repository when the prompted reply ignores selection",
+    () =>
+      Effect.gen(function* () {
+        const harness = makeHandlerLayer({
+          readModel: makeReadModel([]),
+          mappings: [
+            {
+              workspaceRoot: "/tmp/frontend",
+              routeKey: "frontend",
+              teamKey: "ENG",
+              baseBranch: "main",
+            },
+            {
+              workspaceRoot: "/tmp/backend",
+              routeKey: "backend",
+              teamKey: "ENG",
+              baseBranch: "develop",
+            },
+          ],
+        });
+
+        yield* runWebhookSequence(harness.layer, [
+          makeCreatedPayload("linear-session-select"),
+          makePromptedPayload("please just take a look", "linear-session-select"),
+        ]);
+
+        assert.equal(harness.commands.length, 1);
+        const command = harness.commands.find((entry) => entry.type === "thread.turn.start");
+        if (command?.type !== "thread.turn.start" || !command.bootstrap?.prepareWorktree) {
+          throw new Error("Expected thread.turn.start command with prepareWorktree");
+        }
+
+        assert.equal(command.bootstrap.prepareWorktree.projectCwd, "/tmp/frontend");
+        assert.equal(command.bootstrap.prepareWorktree.baseBranch, "main");
+        assert.equal(
+          command.message.text,
+          "new-session:ENG-1:/tmp/frontend/feature/eng-1-fix-linear-webhook-parity",
+        );
+      }),
+  );
+
   it.effect("prunes stale prompted mappings and continues the newest live thread", () =>
     Effect.gen(function* () {
       const staleSession: LinearSessionRow = {
@@ -548,6 +769,16 @@ it.layer(NodeServices.layer)("linear webhook handler", (it) => {
 
       yield* runWebhook(harness.layer, makePromptedPayload("stop working"));
 
+      assert.deepEqual(harness.createdAgentActivities, [
+        {
+          agentSessionId: "linear-session-active",
+          content: {
+            type: "response",
+            body: "Stopping work on this issue at your request.",
+          },
+          ephemeral: false,
+        },
+      ]);
       assert.deepEqual(
         harness.commands.map((command) => command.type),
         ["thread.turn.interrupt", "thread.session.stop"],
@@ -585,6 +816,51 @@ it.layer(NodeServices.layer)("linear webhook handler", (it) => {
         }),
       );
 
+      assert.deepEqual(harness.createdAgentActivities, [
+        {
+          agentSessionId: "linear-session-active",
+          content: {
+            type: "response",
+            body: "Stopping work because the issue moved to 'Done'.",
+          },
+          ephemeral: false,
+        },
+      ]);
+      assert.deepEqual(
+        harness.commands.map((command) => command.type),
+        ["thread.turn.interrupt", "thread.session.stop"],
+      );
+    }),
+  );
+
+  it.effect("posts a final response before stopping unassigned sessions", () =>
+    Effect.gen(function* () {
+      const liveSession: LinearSessionRow = {
+        linearSessionId: "linear-session-active",
+        threadId: activeThreadId,
+        projectId: defaultProjectId,
+        issueId: "issue-1",
+        issueIdentifier: "ENG-1",
+        createdAt: "2026-04-05T12:00:00.000Z",
+      };
+
+      const harness = makeHandlerLayer({
+        readModel: makeReadModel([makeThread(activeThreadId)]),
+        issueSessions: [liveSession],
+      });
+
+      yield* runWebhook(harness.layer, makeUnassignedPayload());
+
+      assert.deepEqual(harness.createdAgentActivities, [
+        {
+          agentSessionId: "linear-session-active",
+          content: {
+            type: "response",
+            body: "Stopping work because this issue was unassigned from me.",
+          },
+          ephemeral: false,
+        },
+      ]);
       assert.deepEqual(
         harness.commands.map((command) => command.type),
         ["thread.turn.interrupt", "thread.session.stop"],

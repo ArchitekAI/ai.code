@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
 import { LinearActivitySink } from "../../linear/Services/LinearActivitySink.ts";
+import { LinearSessionCompletionReactor } from "../../linear/Services/LinearSessionCompletionReactor.ts";
 import { ChildCompletionReactor } from "../../mcp/Services/ChildCompletionReactor.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
@@ -58,6 +59,11 @@ describe("OrchestrationReactor", () => {
         ),
         Layer.provideMerge(
           Layer.succeed(ChildCompletionReactor, {
+            start: () => Effect.void,
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.succeed(LinearSessionCompletionReactor, {
             start: () => Effect.void,
           }),
         ),

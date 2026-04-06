@@ -27,19 +27,37 @@ function readActivityDetail(activity: OrchestrationThreadActivity): string | und
   return undefined;
 }
 
+function readActivityItemType(activity: OrchestrationThreadActivity): string | undefined {
+  if (!activity.payload || typeof activity.payload !== "object") {
+    return undefined;
+  }
+
+  const payload = activity.payload as { itemType?: unknown };
+  return typeof payload.itemType === "string" ? payload.itemType : undefined;
+}
+
 function activityKindToLinearContent(activity: OrchestrationThreadActivity) {
   const detail = readActivityDetail(activity);
+  const itemType = readActivityItemType(activity);
+  const isCommandExecution = itemType === "command_execution";
 
   switch (activity.kind) {
     case "tool.started":
+      if (isCommandExecution) {
+        // Cyrus keeps raw command churn out of the durable issue timeline.
+        return null;
+      }
       return {
         content: {
           type: "thought",
-          body: `Running ${activity.summary}...`,
+          body: detail ? `${activity.summary}: ${detail}` : activity.summary,
         },
         ephemeral: true,
       } as const;
     case "tool.updated":
+      if (isCommandExecution) {
+        return null;
+      }
       return {
         content: {
           type: "thought",
@@ -48,6 +66,9 @@ function activityKindToLinearContent(activity: OrchestrationThreadActivity) {
         ephemeral: true,
       } as const;
     case "tool.completed":
+      if (isCommandExecution) {
+        return null;
+      }
       return {
         content: {
           type: "action",
@@ -70,7 +91,7 @@ function activityKindToLinearContent(activity: OrchestrationThreadActivity) {
           type: "thought",
           body: detail ? `${activity.summary}: ${detail}` : activity.summary,
         },
-        ephemeral: true,
+        ephemeral: false,
       } as const;
     case "task.completed":
       return {
@@ -86,7 +107,7 @@ function activityKindToLinearContent(activity: OrchestrationThreadActivity) {
           type: "thought",
           body: `Waiting for approval: ${activity.summary}`,
         },
-        ephemeral: true,
+        ephemeral: false,
       } as const;
     case "approval.resolved":
       return {
@@ -94,7 +115,7 @@ function activityKindToLinearContent(activity: OrchestrationThreadActivity) {
           type: "thought",
           body: "Approval resolved",
         },
-        ephemeral: true,
+        ephemeral: false,
       } as const;
     case "runtime.error":
       return {
@@ -110,7 +131,7 @@ function activityKindToLinearContent(activity: OrchestrationThreadActivity) {
           type: "thought",
           body: `Warning: ${detail ?? activity.summary}`,
         },
-        ephemeral: true,
+        ephemeral: false,
       } as const;
     case "turn.plan.updated":
       return {
@@ -118,7 +139,7 @@ function activityKindToLinearContent(activity: OrchestrationThreadActivity) {
           type: "thought",
           body: `Plan: ${activity.summary}`,
         },
-        ephemeral: true,
+        ephemeral: false,
       } as const;
     case "prompt-mode.entered":
       return {
@@ -134,7 +155,7 @@ function activityKindToLinearContent(activity: OrchestrationThreadActivity) {
           type: "thought",
           body: "Waiting for user input...",
         },
-        ephemeral: true,
+        ephemeral: false,
       } as const;
     case "context-compaction":
     case "context-window.updated":
@@ -145,7 +166,7 @@ function activityKindToLinearContent(activity: OrchestrationThreadActivity) {
   }
 }
 
-const toLinearActivity = (event: OrchestrationEvent) => {
+export const mapOrchestrationEventToLinearActivity = (event: OrchestrationEvent) => {
   switch (event.type) {
     case "thread.turn-start-requested":
       return {
@@ -157,21 +178,9 @@ const toLinearActivity = (event: OrchestrationEvent) => {
         ephemeral: true,
       } as const;
     case "thread.message-sent":
-      if (
-        event.payload.role !== "assistant" ||
-        event.payload.streaming ||
-        !event.payload.text.trim()
-      ) {
-        return null;
-      }
-      return {
-        threadId: event.payload.threadId,
-        content: {
-          type: "response",
-          body: event.payload.text,
-        },
-        ephemeral: false,
-      } as const;
+      // Cyrus treats the terminal response as session-orchestration output, not
+      // a direct echo of the raw assistant message stream.
+      return null;
     case "thread.turn-diff-completed": {
       const files = event.payload.files.map((file) => file.path).join("\n");
       const additions = event.payload.files.reduce((total, file) => total + file.additions, 0);
@@ -183,7 +192,7 @@ const toLinearActivity = (event: OrchestrationEvent) => {
           action: `Changed ${event.payload.files.length} file${event.payload.files.length === 1 ? "" : "s"} (+${additions} -${deletions})`,
           parameter: files || "No files changed",
         },
-        ephemeral: true,
+        ephemeral: false,
       } as const;
     }
     case "thread.activity-appended": {
@@ -207,15 +216,10 @@ const toLinearActivity = (event: OrchestrationEvent) => {
           ephemeral: false,
         } as const;
       }
+      // Cyrus relies on explicit assistant/error/response activities for terminal
+      // state narration instead of adding a synthetic "session completed" banner.
       if (event.payload.session.status === "stopped") {
-        return {
-          threadId: event.payload.threadId,
-          content: {
-            type: "thought",
-            body: "Session completed",
-          },
-          ephemeral: false,
-        } as const;
+        return null;
       }
       if (event.payload.session.status !== "error" || !event.payload.session.lastError) {
         return null;
@@ -241,33 +245,16 @@ const makeLinearActivitySink = Effect.gen(function* () {
   const publishEvent = Effect.fn("publishLinearActivityEvent")(function* (
     event: OrchestrationEvent,
   ) {
-    const activity = toLinearActivity(event);
+    const activity = mapOrchestrationEventToLinearActivity(event);
     if (!activity) {
-      // Keep a trace of skipped event types so we can debug missing Linear updates.
-      yield* Effect.logInfo("linear activity sink skipped event", {
-        type: event.type,
-      });
       return;
     }
 
     const sessions = yield* sessionRegistry.listByThreadId(activity.threadId);
     const session = latestEntry(sessions);
     if (!session) {
-      // Surface missing thread/session links because they make Linear updates silently disappear.
-      yield* Effect.logWarning("linear activity sink found no linked session", {
-        type: event.type,
-        threadId: activity.threadId,
-      });
       return;
     }
-
-    yield* Effect.logInfo("linear activity sink posting activity", {
-      type: event.type,
-      threadId: activity.threadId,
-      linearSessionId: session.linearSessionId,
-      contentType: activity.content.type,
-      ephemeral: activity.ephemeral,
-    });
 
     yield* linearClient
       .createAgentActivity({
@@ -276,14 +263,6 @@ const makeLinearActivitySink = Effect.gen(function* () {
         ephemeral: activity.ephemeral,
       })
       .pipe(
-        Effect.tap((result) =>
-          Effect.logInfo("linear activity sink posted activity", {
-            type: event.type,
-            threadId: activity.threadId,
-            linearSessionId: session.linearSessionId,
-            activityId: result.activityId,
-          }),
-        ),
         Effect.catch((error) =>
           Effect.logWarning("failed to post Linear activity update", {
             threadId: activity.threadId,

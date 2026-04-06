@@ -46,6 +46,7 @@ import { BootstrapTurnServiceLive } from "./orchestration/Layers/BootstrapTurnSe
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry";
 import { ServerSettingsLive } from "./serverSettings";
 import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver";
+import { ProjectOnboardingLive } from "./project/Layers/ProjectOnboarding";
 import { WorkspaceEntriesLive } from "./workspace/Layers/WorkspaceEntries";
 import { WorkspaceFileSystemLive } from "./workspace/Layers/WorkspaceFileSystem";
 import { WorkspacePathsLive } from "./workspace/Layers/WorkspacePaths";
@@ -54,6 +55,7 @@ import { LinearActivitySinkLive } from "./linear/Layers/LinearActivitySink";
 import { LinearClientLive } from "./linear/Layers/LinearClient";
 import { LinearOAuthLive } from "./linear/Layers/LinearOAuth";
 import { LinearPromptAssemblerLive } from "./linear/Layers/LinearPromptAssembler";
+import { LinearSessionCompletionReactorLive } from "./linear/Layers/LinearSessionCompletionReactor";
 import { LinearSessionRegistryLive } from "./linear/Layers/LinearSessionRegistry";
 import { LinearWebhookHandlerLive } from "./linear/Layers/LinearWebhookHandler";
 import { ObservabilityLive } from "./observability/Layers/Observability";
@@ -118,6 +120,7 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(ProviderCommandReactorLive),
   Layer.provideMerge(CheckpointReactorLive),
   Layer.provideMerge(LinearActivitySinkLive),
+  Layer.provideMerge(LinearSessionCompletionReactorLive),
   Layer.provideMerge(ChildCompletionReactorLive),
   Layer.provideMerge(RuntimeReceiptBusLive),
 );
@@ -249,42 +252,58 @@ const LinearClientRuntimeLive = LinearClientLive.pipe(
   Layer.provide(Layer.mergeAll(ServerSettingsLive, LinearOAuthRuntimeLive)),
 );
 
-const RuntimeDependenciesLive = ReactorLayerLive.pipe(
-  // Core Services
-  Layer.provideMerge(CheckpointingRuntimeLive),
-  Layer.provideMerge(GitLayerLive),
-  Layer.provideMerge(OrchestrationRuntimeLive),
-  Layer.provideMerge(ProviderLayerLive),
-  Layer.provideMerge(TerminalLayerLive),
+const CoreRuntimeDependenciesLive = Layer.empty.pipe(
+  // Keep core runtime dependencies ordered so layers never race one another in parallel startup.
   Layer.provideMerge(PersistenceLayerLive),
+  Layer.provideMerge(CheckpointingRuntimeLive),
+  Layer.provideMerge(OrchestrationRuntimeLive),
+  Layer.provideMerge(TerminalLayerLive),
+  Layer.provideMerge(ServerSettingsLive),
+  Layer.provideMerge(GitLayerLive),
   Layer.provideMerge(KeybindingsLive),
   Layer.provideMerge(BootstrapTurnRuntimeLive),
   Layer.provideMerge(LinearOAuthRuntimeLive),
   Layer.provideMerge(LinearClientRuntimeLive),
   Layer.provideMerge(LinearPromptAssemblerLive),
+  Layer.provideMerge(ProviderLayerLive),
+);
+
+const AuxiliaryRuntimeDependenciesLive = Layer.empty.pipe(
+  // Auxiliary services power repo onboarding, favicon resolution, and cross-session lookups.
+  Layer.provideMerge(ServerSettingsLive),
+  Layer.provideMerge(WorkspaceLayerLive),
   Layer.provideMerge(LinearSessionRegistryRuntimeLive),
   Layer.provideMerge(McpContextRegistryLive),
   Layer.provideMerge(ThreadRelationshipRegistryRuntimeLive),
   Layer.provideMerge(ToolPolicyResolverLive),
   Layer.provideMerge(ProviderRegistryLive),
-  Layer.provideMerge(ServerSettingsLive),
-  Layer.provideMerge(WorkspaceLayerLive),
   Layer.provideMerge(ProjectFaviconResolverLive),
-).pipe(
-  // Misc.
   Layer.provideMerge(AnalyticsServiceLayerLive),
   Layer.provideMerge(OpenLive),
   Layer.provideMerge(ServerLifecycleEventsLive),
+);
+
+const RuntimeDependenciesLive = ReactorLayerLive.pipe(
+  // Core services must exist before startup can wire routes and reactors together.
+  Layer.provideMerge(CoreRuntimeDependenciesLive),
+  Layer.provideMerge(AuxiliaryRuntimeDependenciesLive),
 );
 
 const RuntimeServicesBaseLive = ServerRuntimeStartupLive.pipe(
   Layer.provideMerge(RuntimeDependenciesLive),
 );
 
-const RuntimeServicesLive = Layer.mergeAll(
-  RuntimeServicesBaseLive,
-  // Build the webhook handler only after the startup/runtime services exist to avoid leaking its deps.
-  LinearWebhookHandlerLive.pipe(Layer.provide(RuntimeServicesBaseLive)),
+const ProjectOnboardingRuntimeLive = ProjectOnboardingLive.pipe(
+  // Repo onboarding clones into managed storage and immediately creates a T3 project.
+  Layer.provide(RuntimeServicesBaseLive),
+);
+
+const RuntimeServicesLive = Layer.mergeAll(RuntimeServicesBaseLive, ProjectOnboardingRuntimeLive);
+
+const AppRuntimeLive = Layer.mergeAll(
+  RuntimeServicesLive,
+  // Build the webhook handler only after the startup/runtime services exist to avoid leaking deps.
+  LinearWebhookHandlerLive.pipe(Layer.provide(RuntimeServicesLive)),
 );
 
 export const makeRoutesLayer = Layer.mergeAll(
@@ -321,7 +340,10 @@ export const makeServerLayer = Layer.unwrap(
     );
 
     return serverApplicationLayer.pipe(
-      Layer.provide(RuntimeServicesLive),
+      Layer.provide(AppRuntimeLive),
+      // Close the last runtime gaps explicitly so CLI entrypoints only need ServerConfig.
+      Layer.provide(ServerSettingsLive),
+      Layer.provide(PersistenceLayerLive),
       Layer.provide(HttpServerLive),
       Layer.provide(ObservabilityLive),
       Layer.provide(FetchHttpClient.layer),

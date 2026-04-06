@@ -17,14 +17,14 @@ import {
   LinearWebhookVerificationError,
   MessageId,
   type OrchestrationReadModel,
+  ProjectId,
   OrchestrationDispatchCommandError,
   type PromptType,
-  ProjectId,
   type LinearProjectMapping,
   ThreadId,
 } from "@t3tools/contracts";
 import { sanitizeFeatureBranchName } from "@t3tools/shared/git";
-import { Effect, Layer, Option, Path, Schema } from "effect";
+import { Effect, Layer, Option, Path, Ref, Schema } from "effect";
 
 import { ServerRuntimeStartup } from "../../serverRuntimeStartup.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -33,10 +33,16 @@ import { OrchestrationEngineService } from "../../orchestration/Services/Orchest
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type { ProjectionRepositoryError } from "../../persistence/Errors.ts";
 import { ToolPolicyResolver } from "../../provider/Services/ToolPolicyResolver.ts";
-import { LinearClient, type LinearIssueDetails } from "../Services/LinearClient.ts";
+import { ProjectOnboarding } from "../../project/Services/ProjectOnboarding.ts";
+import {
+  LinearClient,
+  type LinearIssueComment,
+  type LinearIssueDetails,
+} from "../Services/LinearClient.ts";
 import {
   LinearPromptAssembler,
   type LinearPromptAssemblerCommentContext,
+  type LinearPromptAssemblerGuidanceRule,
 } from "../Services/LinearPromptAssembler.ts";
 import {
   LinearSessionRegistry,
@@ -47,11 +53,6 @@ import {
   LinearWebhookHandler,
   type LinearWebhookHandlerShape,
 } from "../Services/LinearWebhookHandler.ts";
-
-const DEFAULT_LINEAR_MODEL_SELECTION = {
-  provider: "codex" as const,
-  model: "gpt-5-codex",
-};
 
 const LINEAR_AGENT_SESSION_MARKER = "This thread is for an agent session";
 const LINEAR_STOP_REQUEST = /^\s*stop(\s+session|\s+working)?[\s.!?]*$/i;
@@ -65,6 +66,17 @@ interface RepoDirective {
   readonly routeKey: string;
   readonly branch?: string;
 }
+
+interface PendingRepositorySelection {
+  readonly mappings: ReadonlyArray<LinearProjectMapping>;
+  readonly guidance?: ReadonlyArray<LinearPromptAssemblerGuidanceRule>;
+  readonly newComment?: LinearPromptAssemblerCommentContext;
+}
+
+type RepositoryRoutingResolution =
+  | { readonly type: "resolved"; readonly mapping: LinearProjectMapping }
+  | { readonly type: "selection"; readonly mappings: ReadonlyArray<LinearProjectMapping> }
+  | { readonly type: "none" };
 
 function normalizeToken(value: string | undefined): string | null {
   const normalized = value?.trim().toLowerCase();
@@ -345,6 +357,90 @@ const resolveMapping = (input: {
     : null;
 };
 
+function buildSelectableMappings(input: {
+  readonly organizationId: string;
+  readonly mappings: ReadonlyArray<LinearProjectMapping>;
+  readonly defaultWorkspaceRoot: string;
+}): ReadonlyArray<LinearProjectMapping> {
+  const scopedMappings = input.mappings.filter((mapping) =>
+    mappingMatchesOrganization(mapping, input.organizationId),
+  );
+  const normalizedWorkspaceRoots = new Set(
+    scopedMappings
+      .map((mapping) => mapping.workspaceRoot.trim())
+      .filter((workspaceRoot) => workspaceRoot.length > 0),
+  );
+  const normalizedDefaultWorkspaceRoot = input.defaultWorkspaceRoot.trim();
+
+  // Treat the default workspace as a first-class routing candidate so Linear
+  // can elicit repository selection the same way Cyrus does.
+  if (
+    normalizedDefaultWorkspaceRoot.length > 0 &&
+    !normalizedWorkspaceRoots.has(normalizedDefaultWorkspaceRoot)
+  ) {
+    return [
+      ...scopedMappings,
+      {
+        workspaceRoot: normalizedDefaultWorkspaceRoot,
+      },
+    ];
+  }
+
+  return scopedMappings;
+}
+
+const resolveRepositoryRouting = (input: {
+  readonly organizationId: string;
+  readonly issueTeamKey: string;
+  readonly labelNames: ReadonlyArray<string>;
+  readonly projectKeys: ReadonlyArray<string>;
+  readonly issueDescription?: string;
+  readonly mappings: ReadonlyArray<LinearProjectMapping>;
+  readonly defaultWorkspaceRoot: string;
+}): RepositoryRoutingResolution => {
+  const selectableMappings = buildSelectableMappings(input);
+  if (selectableMappings.length > 0) {
+    const routingMatches = collectRoutingMatches(input);
+    const firstResolvedTier = routingMatches.find((entry) => entry.matches.length > 0);
+    if (firstResolvedTier) {
+      if (firstResolvedTier.matches.length === 1) {
+        const [mapping] = firstResolvedTier.matches;
+        if (mapping) {
+          // Team-level routing is intentionally broad; when multiple repositories
+          // are configured we mirror Cyrus and ask the user instead of silently
+          // preferring the first team match over the default workspace.
+          if (firstResolvedTier.tier === "team-key" && selectableMappings.length > 1) {
+            return { type: "selection", mappings: selectableMappings };
+          }
+          return { type: "resolved", mapping };
+        }
+      }
+      // Cyrus asks the user to choose when multiple configured repositories remain viable.
+      return { type: "selection", mappings: selectableMappings };
+    }
+
+    if (selectableMappings.length === 1) {
+      const [mapping] = selectableMappings;
+      if (mapping) {
+        return { type: "resolved", mapping };
+      }
+    }
+
+    // When multiple repositories are available we prefer Cyrus-style repo
+    // elicitation over silently picking the fallback workspace.
+    return { type: "selection", mappings: selectableMappings };
+  }
+
+  const resolvedFallback = resolveMapping({
+    ...input,
+    defaultWorkspaceRoot: input.defaultWorkspaceRoot,
+  });
+  if (resolvedFallback) {
+    return { type: "resolved", mapping: resolvedFallback };
+  }
+  return { type: "none" };
+};
+
 function collectRoutingMatches(input: {
   readonly organizationId: string;
   readonly issueTeamKey: string;
@@ -593,8 +689,12 @@ const makeLinearWebhookHandler = Effect.gen(function* () {
   const linearClient = yield* LinearClient;
   const promptAssembler = yield* LinearPromptAssembler;
   const path = yield* Path.Path;
+  const projectOnboarding = yield* ProjectOnboarding;
   const threadRelationshipRegistry = yield* ThreadRelationshipRegistry;
   const toolPolicyResolver = yield* ToolPolicyResolver;
+  const pendingRepositorySelections = yield* Ref.make(
+    new Map<string, PendingRepositorySelection>(),
+  );
 
   const dispatchCommand = Effect.fn("dispatchCommand")(function* (
     command: Parameters<typeof orchestrationEngine.dispatch>[0],
@@ -612,40 +712,6 @@ const makeLinearWebhookHandler = Effect.gen(function* () {
             }),
       ),
     );
-  });
-
-  const ensureProjectForWorkspaceRoot = Effect.fn("ensureProjectForWorkspaceRoot")(function* (
-    workspaceRoot: string,
-  ) {
-    const existingProject =
-      yield* projectionSnapshotQuery.getActiveProjectByWorkspaceRoot(workspaceRoot);
-    if (Option.isSome(existingProject)) {
-      return {
-        id: existingProject.value.id,
-        defaultModelSelection:
-          existingProject.value.defaultModelSelection ?? DEFAULT_LINEAR_MODEL_SELECTION,
-      };
-    }
-
-    const createdAt = new Date().toISOString();
-    const projectId = ProjectId.makeUnsafe(crypto.randomUUID());
-    const projectTitle = path.basename(workspaceRoot) || "project";
-
-    // Reuse the existing project.create path so webhook projects behave like UI-created projects.
-    yield* dispatchCommand({
-      type: "project.create",
-      commandId: makeServerCommandId("linear-project-create"),
-      projectId,
-      title: projectTitle,
-      workspaceRoot,
-      defaultModelSelection: DEFAULT_LINEAR_MODEL_SELECTION,
-      createdAt,
-    });
-
-    return {
-      id: projectId,
-      defaultModelSelection: DEFAULT_LINEAR_MODEL_SELECTION,
-    };
   });
 
   const lookupThreadContext: (
@@ -721,9 +787,252 @@ const makeLinearWebhookHandler = Effect.gen(function* () {
         );
       }
 
-      return resolveMapping(input);
+      return resolveRepositoryRouting(input);
     },
   );
+
+  const storePendingRepositorySelection = Effect.fn("storePendingRepositorySelection")(
+    function* (input: {
+      readonly linearSessionId: string;
+      readonly pending: PendingRepositorySelection;
+    }) {
+      yield* Ref.update(pendingRepositorySelections, (current) => {
+        const next = new Map(current);
+        next.set(input.linearSessionId, input.pending);
+        return next;
+      });
+    },
+  );
+
+  const takePendingRepositorySelection = Effect.fn("takePendingRepositorySelection")(function* (
+    linearSessionId: string,
+  ) {
+    return yield* Ref.modify(pendingRepositorySelections, (current) => {
+      const next = new Map(current);
+      const pending = next.get(linearSessionId) ?? null;
+      next.delete(linearSessionId);
+      return [pending, next] as const;
+    });
+  });
+
+  const elicitRepositorySelection = Effect.fn("elicitRepositorySelection")(function* (input: {
+    readonly linearSessionId: string;
+    readonly mappings: ReadonlyArray<LinearProjectMapping>;
+  }) {
+    const firstMapping = input.mappings[0];
+    if (!firstMapping) {
+      return;
+    }
+
+    const options = input.mappings.map((mapping) => ({
+      value: defaultRouteKey(mapping),
+    }));
+
+    yield* linearClient.createAgentActivity({
+      agentSessionId: input.linearSessionId,
+      content: {
+        type: "elicitation",
+        body: "Which repository should I work in for this issue?",
+      },
+      signal: "select",
+      signalMetadata: { options },
+    });
+  });
+
+  const postResponseActivity = Effect.fn("postResponseActivity")(function* (input: {
+    readonly linearSessionId: string;
+    readonly body: string;
+  }) {
+    // Cyrus emits explicit response activities for terminal session moments so
+    // Linear always has a durable explanation instead of only an interrupt.
+    yield* linearClient.createAgentActivity({
+      agentSessionId: input.linearSessionId,
+      content: {
+        type: "response",
+        body: input.body,
+      },
+      ephemeral: false,
+    });
+  });
+
+  const stopSessionsWithResponse = Effect.fn("stopSessionsWithResponse")(function* (input: {
+    readonly sessions: ReadonlyArray<LinearSessionRow>;
+    readonly responseBody: string;
+  }) {
+    for (const session of input.sessions) {
+      yield* postResponseActivity({
+        linearSessionId: session.linearSessionId,
+        body: input.responseBody,
+      }).pipe(Effect.catch(() => Effect.void));
+    }
+
+    const uniqueThreadIds = [...new Set(input.sessions.map((entry) => entry.threadId))];
+    for (const threadId of uniqueThreadIds) {
+      yield* stopThreadForSession(threadId);
+    }
+  });
+
+  const selectMappingFromPrompt = (input: {
+    readonly mappings: ReadonlyArray<LinearProjectMapping>;
+    readonly prompt: string;
+  }): { readonly mapping: LinearProjectMapping; readonly matchedSelection: boolean } | null => {
+    const firstMapping = input.mappings[0];
+    if (!firstMapping) {
+      return null;
+    }
+
+    const selectedMapping =
+      input.mappings.find((mapping) => mappingMatchesRouteKey(mapping, input.prompt)) ?? null;
+    return {
+      mapping: selectedMapping ?? firstMapping,
+      matchedSelection: selectedMapping !== null,
+    };
+  };
+
+  const startNewIssueSession = Effect.fn("startNewIssueSession")(function* (input: {
+    readonly linearSessionId: string;
+    readonly issue: LinearIssueDetails;
+    readonly issueComments: ReadonlyArray<LinearIssueComment>;
+    readonly mapping: LinearProjectMapping;
+    readonly guidance?: ReadonlyArray<LinearPromptAssemblerGuidanceRule>;
+    readonly newComment?: LinearPromptAssemblerCommentContext;
+    readonly parentLinearSessionId?: string;
+  }) {
+    const parentRelationship = input.parentLinearSessionId
+      ? yield* threadRelationshipRegistry.findParentByLinearSession(input.parentLinearSessionId)
+      : Option.none();
+    const parentThreadContext = Option.isSome(parentRelationship)
+      ? yield* lookupThreadContext(parentRelationship.value.parentThreadId)
+      : Option.none<ActiveThreadContext>();
+    const project = yield* projectOnboarding
+      .ensureProjectForWorkspaceRoot(input.mapping.workspaceRoot)
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new LinearWebhookHandlerError({
+              detail:
+                cause instanceof Error
+                  ? cause.message
+                  : "Failed to prepare project for Linear issue.",
+              cause,
+            }),
+        ),
+      );
+    const promptType = yield* resolvePromptTypeWithDiagnostics({
+      issueIdentifier: input.issue.identifier,
+      labelNames: input.issue.labelNames,
+      mapping: input.mapping,
+    });
+    const blockedByBranch =
+      promptType === "graphite-orchestrator" ? yield* findBlockedByBranch(input.issue) : null;
+    const baseBranch = resolveBaseBranch({
+      issue: input.issue,
+      mapping: input.mapping,
+      blockedByBranch,
+      parentBranch:
+        Option.isSome(parentThreadContext) &&
+        parentThreadContext.value.projectId === project.projectId
+          ? parentThreadContext.value.branch
+          : null,
+    });
+    const snapshot = yield* projectionSnapshotQuery.getSnapshot();
+    const repositoryRoutingContext =
+      promptType === "orchestrator" || promptType === "graphite-orchestrator"
+        ? buildRepositoryRoutingContext({
+            currentProjectId: project.projectId,
+            projects: snapshot.projects,
+            mappings: (yield* serverSettings.getSettings).linearProjectMappings.mappings,
+          })
+        : undefined;
+    const createdAt = new Date().toISOString();
+    const threadId = ThreadId.makeUnsafe(crypto.randomUUID());
+    const branchName = sanitizeFeatureBranchName(`${input.issue.identifier} ${input.issue.title}`);
+    const worktreePath = path.join(input.mapping.workspaceRoot, branchName);
+    const promptAssembly = yield* promptAssembler.assembleNewSessionPrompt({
+      issue: input.issue,
+      comments: input.issueComments,
+      workspaceRoot: input.mapping.workspaceRoot,
+      worktreePath,
+      baseBranch,
+      promptType,
+      ...(repositoryRoutingContext ? { repositoryRoutingContext } : {}),
+      ...(input.newComment ? { newComment: input.newComment } : {}),
+      ...(input.guidance ? { guidance: input.guidance } : {}),
+    });
+    const toolPolicy = yield* resolveToolPolicy({
+      promptType: promptAssembly.promptType,
+      mappings: [input.mapping],
+    });
+
+    yield* dispatchCommand({
+      type: "thread.turn.start",
+      commandId: makeServerCommandId("linear-bootstrap-turn-start"),
+      threadId,
+      message: {
+        messageId: MessageId.makeUnsafe(crypto.randomUUID()),
+        role: "user",
+        text: promptAssembly.prompt,
+        attachments: [],
+      },
+      modelSelection: project.defaultModelSelection,
+      titleSeed: input.issue.title,
+      runtimeMode: "full-access",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      promptType: promptAssembly.promptType,
+      ...(promptAssembly.systemPromptPrefix
+        ? { systemPromptPrefix: promptAssembly.systemPromptPrefix }
+        : {}),
+      ...(toolPolicy.allowedTools !== undefined
+        ? { allowedTools: [...toolPolicy.allowedTools] }
+        : {}),
+      ...(toolPolicy.disallowedTools !== undefined
+        ? { disallowedTools: [...toolPolicy.disallowedTools] }
+        : {}),
+      bootstrap: {
+        createThread: {
+          projectId: project.projectId,
+          title: input.issue.identifier,
+          modelSelection: project.defaultModelSelection,
+          runtimeMode: "full-access",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          branch: null,
+          worktreePath: null,
+          createdAt,
+        },
+        prepareWorktree: {
+          projectCwd: input.mapping.workspaceRoot,
+          baseBranch,
+          branch: branchName,
+          writeLinearMcpConfig: true,
+        },
+        runSetupScript: true,
+      },
+      createdAt,
+    });
+
+    yield* sessionRegistry.register({
+      linearSessionId: input.linearSessionId,
+      threadId,
+      projectId: project.projectId,
+      issueId: input.issue.id,
+      issueIdentifier: input.issue.identifier,
+      createdAt,
+    });
+    if (Option.isSome(parentRelationship)) {
+      yield* threadRelationshipRegistry.attachChildThread({
+        childLinearSessionId: input.linearSessionId,
+        childThreadId: threadId,
+        childIssueIdentifier: input.issue.identifier,
+        childWorktreePath: worktreePath,
+        attachedAt: createdAt,
+      });
+    }
+    yield* appendPromptModeActivity({
+      threadId,
+      promptType: promptAssembly.promptType,
+      createdAt,
+    });
+  });
 
   const resolvePromptTypeWithDiagnostics = Effect.fn("resolvePromptTypeWithDiagnostics")(
     function* (input: {
@@ -811,14 +1120,12 @@ const makeLinearWebhookHandler = Effect.gen(function* () {
   ) {
     const fetchedIssue = yield* linearClient.fetchIssue(webhook.agentSession.issue.id);
     const issueComments = yield* linearClient.fetchIssueComments(fetchedIssue.id);
+    const newComment = newCommentFromCreatedWebhook(webhook);
     const issueSessions = yield* sessionRegistry.listByIssueId(fetchedIssue.id);
     const existingSessionContext = yield* findLatestLiveSessionContext(issueSessions);
     const parentRelationship = yield* threadRelationshipRegistry.findParentByLinearSession(
       webhook.agentSession.id,
     );
-    const parentThreadContext = Option.isSome(parentRelationship)
-      ? yield* lookupThreadContext(parentRelationship.value.parentThreadId)
-      : Option.none<ActiveThreadContext>();
 
     if (existingSessionContext) {
       const settings = yield* serverSettings.getSettings;
@@ -849,7 +1156,6 @@ const makeLinearWebhookHandler = Effect.gen(function* () {
       const existingWorktreePath =
         existingSessionContext.thread.worktreePath ??
         path.join("/tmp", existingSessionContext.thread.id);
-      const newComment = newCommentFromCreatedWebhook(webhook);
       const promptAssembly = yield* promptAssembler.assembleNewSessionPrompt({
         issue: fetchedIssue,
         comments: issueComments,
@@ -918,7 +1224,7 @@ const makeLinearWebhookHandler = Effect.gen(function* () {
     }
 
     const settings = yield* serverSettings.getSettings;
-    const mapping = yield* resolveMappingWithDiagnostics({
+    const routingResolution = yield* resolveMappingWithDiagnostics({
       organizationId: webhook.organizationId,
       issueTeamKey: fetchedIssue.teamKey,
       labelNames: fetchedIssue.labelNames,
@@ -929,128 +1235,38 @@ const makeLinearWebhookHandler = Effect.gen(function* () {
       issueIdentifier: fetchedIssue.identifier,
     });
 
-    if (!mapping) {
+    if (routingResolution.type === "selection") {
+      yield* storePendingRepositorySelection({
+        linearSessionId: webhook.agentSession.id,
+        pending: {
+          mappings: routingResolution.mappings,
+          ...(newComment ? { newComment } : {}),
+          ...(webhook.guidance ? { guidance: webhook.guidance } : {}),
+        },
+      });
+      yield* elicitRepositorySelection({
+        linearSessionId: webhook.agentSession.id,
+        mappings: routingResolution.mappings,
+      });
+      return;
+    }
+
+    if (routingResolution.type === "none") {
       return yield* new LinearWebhookHandlerError({
         detail: `No Linear project mapping matched ${fetchedIssue.identifier}.`,
       });
     }
-
-    const project = yield* ensureProjectForWorkspaceRoot(mapping.workspaceRoot);
-    const promptType = yield* resolvePromptTypeWithDiagnostics({
-      issueIdentifier: fetchedIssue.identifier,
-      labelNames: fetchedIssue.labelNames,
-      mapping,
-    });
-    const blockedByBranch =
-      promptType === "graphite-orchestrator" ? yield* findBlockedByBranch(fetchedIssue) : null;
-    const baseBranch = resolveBaseBranch({
+    const mapping = routingResolution.mapping;
+    yield* startNewIssueSession({
+      linearSessionId: webhook.agentSession.id,
       issue: fetchedIssue,
+      issueComments,
       mapping,
-      blockedByBranch,
-      parentBranch:
-        Option.isSome(parentThreadContext) && parentThreadContext.value.projectId === project.id
-          ? parentThreadContext.value.branch
-          : null,
-    });
-    const snapshot = yield* projectionSnapshotQuery.getSnapshot();
-    const repositoryRoutingContext =
-      promptType === "orchestrator" || promptType === "graphite-orchestrator"
-        ? buildRepositoryRoutingContext({
-            currentProjectId: project.id,
-            projects: snapshot.projects,
-            mappings: settings.linearProjectMappings.mappings,
-          })
-        : undefined;
-    const createdAt = new Date().toISOString();
-    const threadId = ThreadId.makeUnsafe(crypto.randomUUID());
-    const branchName = sanitizeFeatureBranchName(
-      `${fetchedIssue.identifier} ${fetchedIssue.title}`,
-    );
-    const worktreePath = path.join(mapping.workspaceRoot, branchName);
-    const newComment = newCommentFromCreatedWebhook(webhook);
-    const promptAssembly = yield* promptAssembler.assembleNewSessionPrompt({
-      issue: fetchedIssue,
-      comments: issueComments,
-      workspaceRoot: mapping.workspaceRoot,
-      worktreePath,
-      baseBranch,
-      promptType,
-      ...(repositoryRoutingContext ? { repositoryRoutingContext } : {}),
       ...(newComment ? { newComment } : {}),
       ...(webhook.guidance ? { guidance: webhook.guidance } : {}),
-    });
-    const toolPolicy = yield* resolveToolPolicy({
-      promptType: promptAssembly.promptType,
-      mappings: [mapping],
-    });
-
-    yield* dispatchCommand({
-      type: "thread.turn.start",
-      commandId: makeServerCommandId("linear-bootstrap-turn-start"),
-      threadId,
-      message: {
-        messageId: MessageId.makeUnsafe(crypto.randomUUID()),
-        role: "user",
-        text: promptAssembly.prompt,
-        attachments: [],
-      },
-      modelSelection: project.defaultModelSelection,
-      titleSeed: fetchedIssue.title,
-      runtimeMode: "full-access",
-      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-      promptType: promptAssembly.promptType,
-      ...(promptAssembly.systemPromptPrefix
-        ? { systemPromptPrefix: promptAssembly.systemPromptPrefix }
+      ...(Option.isSome(parentRelationship)
+        ? { parentLinearSessionId: webhook.agentSession.id }
         : {}),
-      ...(toolPolicy.allowedTools !== undefined
-        ? { allowedTools: [...toolPolicy.allowedTools] }
-        : {}),
-      ...(toolPolicy.disallowedTools !== undefined
-        ? { disallowedTools: [...toolPolicy.disallowedTools] }
-        : {}),
-      bootstrap: {
-        createThread: {
-          projectId: project.id,
-          title: fetchedIssue.identifier,
-          modelSelection: project.defaultModelSelection,
-          runtimeMode: "full-access",
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          branch: null,
-          worktreePath: null,
-          createdAt,
-        },
-        prepareWorktree: {
-          projectCwd: mapping.workspaceRoot,
-          baseBranch,
-          branch: branchName,
-          writeLinearMcpConfig: true,
-        },
-        runSetupScript: true,
-      },
-      createdAt,
-    });
-
-    yield* sessionRegistry.register({
-      linearSessionId: webhook.agentSession.id,
-      threadId,
-      projectId: project.id,
-      issueId: fetchedIssue.id,
-      issueIdentifier: fetchedIssue.identifier,
-      createdAt,
-    });
-    if (Option.isSome(parentRelationship)) {
-      yield* threadRelationshipRegistry.attachChildThread({
-        childLinearSessionId: webhook.agentSession.id,
-        childThreadId: threadId,
-        childIssueIdentifier: fetchedIssue.identifier,
-        childWorktreePath: worktreePath,
-        attachedAt: createdAt,
-      });
-    }
-    yield* appendPromptModeActivity({
-      threadId,
-      promptType: promptAssembly.promptType,
-      createdAt,
     });
   });
 
@@ -1058,6 +1274,47 @@ const makeLinearWebhookHandler = Effect.gen(function* () {
     webhook: LinearAgentSessionPromptedWebhookPayload,
   ) {
     const issueId = webhook.agentSession.issueId ?? webhook.agentSession.issue.id;
+    const pendingSelection = yield* takePendingRepositorySelection(webhook.agentSession.id);
+
+    if (
+      webhook.agentActivity?.signal === "stop" ||
+      LINEAR_STOP_REQUEST.test(stopTextFromPromptedWebhook(webhook))
+    ) {
+      if (pendingSelection) {
+        return;
+      }
+    }
+
+    if (pendingSelection) {
+      const fetchedIssue = yield* linearClient.fetchIssue(issueId);
+      const issueComments = yield* linearClient.fetchIssueComments(fetchedIssue.id);
+      const selectedPrompt = promptFromPromptedWebhook(webhook);
+      const selectedMapping = selectMappingFromPrompt({
+        mappings: pendingSelection.mappings,
+        prompt: selectedPrompt,
+      });
+      if (!selectedMapping) {
+        return yield* new LinearWebhookHandlerError({
+          detail: `No repository mappings are available for prompted issue ${issueId}.`,
+        });
+      }
+
+      const followUpComment = selectedMapping.matchedSelection
+        ? pendingSelection.newComment
+        : continuationCommentFromPromptedWebhook(webhook);
+
+      yield* startNewIssueSession({
+        linearSessionId: webhook.agentSession.id,
+        issue: fetchedIssue,
+        issueComments,
+        mapping: selectedMapping.mapping,
+        ...(followUpComment ? { newComment: followUpComment } : {}),
+        ...(pendingSelection.guidance ? { guidance: pendingSelection.guidance } : {}),
+        parentLinearSessionId: webhook.agentSession.id,
+      });
+      return;
+    }
+
     const sessionLookup = yield* sessionRegistry.lookupBySessionId(webhook.agentSession.id);
     const fallbackSessions = yield* sessionRegistry.listByIssueId(issueId);
     const sessionCandidates = dedupeSessions(
@@ -1078,6 +1335,10 @@ const makeLinearWebhookHandler = Effect.gen(function* () {
       webhook.agentActivity?.signal === "stop" ||
       LINEAR_STOP_REQUEST.test(stopTextFromPromptedWebhook(webhook))
     ) {
+      yield* postResponseActivity({
+        linearSessionId: targetSession.session.linearSessionId,
+        body: "Stopping work on this issue at your request.",
+      }).pipe(Effect.catch(() => Effect.void));
       yield* stopThreadForSession(targetSession.thread.id);
       return;
     }
@@ -1146,10 +1407,10 @@ const makeLinearWebhookHandler = Effect.gen(function* () {
       const nextState = yield* linearClient.fetchIssueState(webhook.data.id);
       if (isTerminalWorkflowState(nextState)) {
         const sessions = yield* sessionRegistry.listByIssueId(webhook.data.id);
-        const uniqueThreadIds = [...new Set(sessions.map((entry) => entry.threadId))];
-        for (const threadId of uniqueThreadIds) {
-          yield* stopThreadForSession(threadId);
-        }
+        yield* stopSessionsWithResponse({
+          sessions,
+          responseBody: `Stopping work because the issue moved to '${nextState.name}'.`,
+        });
         yield* sessionRegistry.removeByIssueId(webhook.data.id);
         return;
       }
@@ -1226,10 +1487,10 @@ const makeLinearWebhookHandler = Effect.gen(function* () {
     webhook: LinearIssueUnassignedWebhookPayload,
   ) {
     const sessions = yield* sessionRegistry.listByIssueId(webhook.notification.issueId);
-    const uniqueThreadIds = [...new Set(sessions.map((entry) => entry.threadId))];
-    for (const threadId of uniqueThreadIds) {
-      yield* stopThreadForSession(threadId);
-    }
+    yield* stopSessionsWithResponse({
+      sessions,
+      responseBody: "Stopping work because this issue was unassigned from me.",
+    });
     yield* sessionRegistry.removeByIssueId(webhook.notification.issueId);
   });
 

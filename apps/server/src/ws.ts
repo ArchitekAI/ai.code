@@ -9,6 +9,7 @@ import {
   OrchestrationGetSnapshotError,
   OrchestrationGetTurnDiffError,
   ORCHESTRATION_WS_METHODS,
+  ProjectAddError,
   ProjectSearchEntriesError,
   ProjectWriteFileError,
   OrchestrationReplayEventsError,
@@ -36,6 +37,7 @@ import {
   observeRpcStreamEffect,
 } from "./observability/RpcInstrumentation";
 import { ProviderRegistry } from "./provider/Services/ProviderRegistry";
+import { ProjectOnboarding } from "./project/Services/ProjectOnboarding";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
 import { ServerSettingsService } from "./serverSettings";
@@ -62,6 +64,7 @@ const WsRpcLayer = WsRpcGroup.toLayer(
     const startup = yield* ServerRuntimeStartup;
     const workspaceEntries = yield* WorkspaceEntries;
     const workspaceFileSystem = yield* WorkspaceFileSystem;
+    const projectOnboarding = yield* ProjectOnboarding;
 
     const loadServerConfig = Effect.gen(function* () {
       const keybindingsConfig = yield* keybindings.loadConfigState;
@@ -275,6 +278,25 @@ const WsRpcLayer = WsRpcGroup.toLayer(
         observeRpcEffect(WS_METHODS.serverUpdateSettings, serverSettings.updateSettings(patch), {
           "rpc.aggregate": "server",
         }),
+      [WS_METHODS.projectsAdd]: (input) =>
+        observeRpcEffect(
+          WS_METHODS.projectsAdd,
+          projectOnboarding.addRepository(input).pipe(
+            Effect.mapError((cause) =>
+              // Tagged errors may cross Effect boundaries without preserving instanceof.
+              Schema.is(ProjectAddError)(cause)
+                ? cause
+                : new ProjectAddError({
+                    message:
+                      cause instanceof Error
+                        ? cause.message
+                        : "Failed to onboard repository into T3 Code.",
+                    cause,
+                  }),
+            ),
+          ),
+          { "rpc.aggregate": "workspace" },
+        ),
       [WS_METHODS.projectsSearchEntries]: (input) =>
         observeRpcEffect(
           WS_METHODS.projectsSearchEntries,

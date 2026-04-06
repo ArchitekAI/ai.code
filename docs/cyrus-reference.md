@@ -1,7 +1,8 @@
 # Cyrus Implementation Reference
 
-> Definitive reference for porting cyrus's background agent orchestration to T3 Code.
+> A reference for porting cyrus's background agent orchestration to T3 Code.
 > Use as a checklist: each section maps to a capability that T3 Code needs to replicate.
+> Go to .cyrus-ref folder for exact code implementation
 
 ---
 
