@@ -113,6 +113,28 @@ const applyDevelopmentIconOverrides = Effect.fn("applyDevelopmentIconOverrides")
   yield* Effect.log("[cli] Applied development icon overrides to dist/client");
 });
 
+const copyLinearPromptAssets = Effect.fn("copyLinearPromptAssets")(function* (
+  repoRoot: string,
+  serverDir: string,
+) {
+  const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
+
+  const promptSource = path.join(repoRoot, "apps/server/src/linear/prompts");
+  const promptTarget = path.join(serverDir, "dist/linear/prompts");
+
+  if (!(yield* fs.exists(promptSource))) {
+    return yield* new CliError({
+      message: `Missing Linear prompt source directory: ${promptSource}`,
+    });
+  }
+
+  // Keep prompt assets beside the built Linear modules so runtime relative paths
+  // resolve the same way in local builds and on self-hosted servers.
+  yield* fs.copy(promptSource, promptTarget);
+  yield* Effect.log("[cli] Copied Linear prompt assets into dist/linear/prompts");
+});
+
 // ---------------------------------------------------------------------------
 // build subcommand
 // ---------------------------------------------------------------------------
@@ -139,6 +161,7 @@ const buildCmd = Command.make(
           shell: process.platform === "win32",
         })`bun tsdown`,
       );
+      yield* copyLinearPromptAssets(repoRoot, serverDir);
 
       const webDist = path.join(repoRoot, "apps/web/dist");
       const clientTarget = path.join(serverDir, "dist/client");
