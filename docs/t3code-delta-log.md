@@ -24,6 +24,36 @@ For each entry, capture:
 
 ## 2026-04-05
 
+### Cyrus-style Linear OAuth self-hosting flow
+
+- Status: Local-only
+- Merge risk: High
+- User context: The user wanted this fork to match the real Cyrus self-hosting behavior and explicitly asked that `.cyrus-ref` be treated as the primary parity reference instead of using a simplified direct-token-only Linear setup.
+- Why: Upstream `t3code` has no Cyrus-style Linear OAuth app install flow. This fork now supports the same environment model and callback flow Cyrus uses for self-hosted Linear installs.
+- Behavior:
+  - The server now understands Cyrus-style Linear env names, including `LINEAR_CLIENT_ID`, `LINEAR_CLIENT_SECRET`, `LINEAR_WEBHOOK_SECRET`, `LINEAR_DIRECT_WEBHOOKS`, and `CYRUS_BASE_URL`.
+  - Linear OAuth credentials can now be installed through HTTP routes instead of only through a pre-seeded API token.
+  - `GET /oauth/authorize` redirects to Linear's OAuth app authorization page using the Cyrus-compatible actor/scopes payload.
+  - `GET /callback` exchanges the authorization code, fetches the authorized workspace metadata, and persists the installed workspace token/refresh token into server settings.
+  - The Linear client now falls back to the installed OAuth workspace token when no direct API token is configured and refreshes the token when Linear returns an auth failure.
+  - The server now accepts Cyrus-compatible Linear webhook delivery on both `POST /webhook` and `POST /webhook/linear`.
+- Files:
+  - `AGENTS.md`
+  - `apps/server/src/cli.ts`
+  - `apps/server/src/server.ts`
+  - `apps/server/src/server.test.ts`
+  - `apps/server/src/cli-config.test.ts`
+  - `apps/server/src/linear/Layers/LinearOAuth.ts`
+  - `apps/server/src/linear/Layers/LinearOAuth.test.ts`
+  - `apps/server/src/linear/Layers/LinearOAuthRoute.ts`
+  - `apps/server/src/linear/Layers/LinearWebhookRoute.ts`
+  - `apps/server/src/linear/Layers/LinearClient.ts`
+  - `apps/server/src/linear/Services/LinearOAuth.ts`
+  - `apps/server/src/orchestration/Layers/BootstrapTurnService.ts`
+  - `packages/contracts/src/linear.ts`
+  - `packages/contracts/src/settings.ts`
+- Notes: This is a deep fork divergence because startup config, persisted settings, Linear client auth, and HTTP route assembly all now depend on Cyrus parity assumptions. Upstream merges touching Linear runtime config, settings schemas, or route composition will need careful review.
+
 ### T3 MCP child-orchestration mode for Linear sessions
 
 - Status: Local-only

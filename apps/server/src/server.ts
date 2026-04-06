@@ -9,6 +9,7 @@ import {
   staticAndDevRouteLayer,
 } from "./http";
 import { linearWebhookRouteLayer } from "./linear/Layers/LinearWebhookRoute";
+import { linearOAuthRouteLayer } from "./linear/Layers/LinearOAuthRoute";
 import { fixPath } from "./os-jank";
 import { websocketRpcRouteLayer } from "./ws";
 import { OpenLive } from "./open";
@@ -51,6 +52,7 @@ import { WorkspacePathsLive } from "./workspace/Layers/WorkspacePaths";
 import { ProjectSetupScriptRunnerLive } from "./project/Layers/ProjectSetupScriptRunner";
 import { LinearActivitySinkLive } from "./linear/Layers/LinearActivitySink";
 import { LinearClientLive } from "./linear/Layers/LinearClient";
+import { LinearOAuthLive } from "./linear/Layers/LinearOAuth";
 import { LinearPromptAssemblerLive } from "./linear/Layers/LinearPromptAssembler";
 import { LinearSessionRegistryLive } from "./linear/Layers/LinearSessionRegistry";
 import { LinearWebhookHandlerLive } from "./linear/Layers/LinearWebhookHandler";
@@ -235,6 +237,18 @@ const WorkspaceLayerLive = Layer.mergeAll(
   ),
 );
 
+const LinearOAuthRuntimeLive = LinearOAuthLive.pipe(
+  // Cyrus-style OAuth credentials are stored in server settings, so the OAuth layer
+  // should never leak that dependency to the app runtime.
+  Layer.provide(ServerSettingsLive),
+);
+
+const LinearClientRuntimeLive = LinearClientLive.pipe(
+  // The Linear client can authenticate with either a direct token or the installed
+  // OAuth workspace token, so we satisfy both dependencies here.
+  Layer.provide(Layer.mergeAll(ServerSettingsLive, LinearOAuthRuntimeLive)),
+);
+
 const RuntimeDependenciesLive = ReactorLayerLive.pipe(
   // Core Services
   Layer.provideMerge(CheckpointingRuntimeLive),
@@ -245,7 +259,8 @@ const RuntimeDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(PersistenceLayerLive),
   Layer.provideMerge(KeybindingsLive),
   Layer.provideMerge(BootstrapTurnRuntimeLive),
-  Layer.provideMerge(LinearClientLive),
+  Layer.provideMerge(LinearOAuthRuntimeLive),
+  Layer.provideMerge(LinearClientRuntimeLive),
   Layer.provideMerge(LinearPromptAssemblerLive),
   Layer.provideMerge(LinearSessionRegistryRuntimeLive),
   Layer.provideMerge(McpContextRegistryLive),
@@ -274,6 +289,7 @@ const RuntimeServicesLive = Layer.mergeAll(
 
 export const makeRoutesLayer = Layer.mergeAll(
   attachmentsRouteLayer,
+  linearOAuthRouteLayer,
   linearWebhookRouteLayer,
   mcpDocsRouteLayer,
   mcpToolsRouteLayer,

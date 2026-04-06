@@ -408,4 +408,55 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       });
     }),
   );
+
+  it.effect("maps Cyrus-style Linear OAuth env vars into runtime Linear settings overrides", () =>
+    Effect.gen(function* () {
+      const { join } = yield* Path.Path;
+      const baseDir = join(os.tmpdir(), "t3-cli-config-linear-oauth");
+
+      const resolved = yield* resolveServerConfig(
+        {
+          mode: Option.some("remote"),
+          port: Option.some(3773),
+          host: Option.none(),
+          baseDir: Option.some(baseDir),
+          cwd: Option.none(),
+          devUrl: Option.none(),
+          noBrowser: Option.none(),
+          authToken: Option.none(),
+          bootstrapFd: Option.none(),
+          autoBootstrapProjectFromCwd: Option.none(),
+          logWebSocketEvents: Option.none(),
+        },
+        Option.none(),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({
+                env: {
+                  LINEAR_DIRECT_WEBHOOKS: "true",
+                  LINEAR_CLIENT_ID: "linear-client-id",
+                  LINEAR_CLIENT_SECRET: "linear-client-secret",
+                  LINEAR_WEBHOOK_SECRET: "linear-webhook-secret",
+                  CYRUS_BASE_URL: "https://cyrus.example.com",
+                },
+              }),
+            ),
+            NetService.layer,
+          ),
+        ),
+      );
+
+      expect(resolved.linearSettingsOverrides).toEqual({
+        enabled: true,
+        webhookSecret: "linear-webhook-secret",
+        oauth: {
+          clientId: "linear-client-id",
+          clientSecret: "linear-client-secret",
+          baseUrl: "https://cyrus.example.com",
+        },
+      });
+    }),
+  );
 });

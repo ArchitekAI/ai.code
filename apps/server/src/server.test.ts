@@ -64,6 +64,7 @@ import {
   LinearWebhookHandler,
   type LinearWebhookHandlerShape,
 } from "./linear/Services/LinearWebhookHandler.ts";
+import { LinearOAuth, type LinearOAuthShape } from "./linear/Services/LinearOAuth.ts";
 import { LinearClient, type LinearClientShape } from "./linear/Services/LinearClient.ts";
 import {
   LinearSessionRegistry,
@@ -281,6 +282,7 @@ const buildAppUnderTest = (options?: {
     checkpointDiffQuery?: Partial<CheckpointDiffQueryShape>;
     browserTraceCollector?: Partial<BrowserTraceCollectorShape>;
     linearWebhookHandler?: Partial<LinearWebhookHandlerShape>;
+    linearOAuth?: Partial<LinearOAuthShape>;
     linearClient?: Partial<LinearClientShape>;
     linearSessionRegistry?: Partial<LinearSessionRegistryShape>;
     mcpContextRegistry?: Partial<McpContextRegistryShape>;
@@ -435,6 +437,15 @@ const buildAppUnderTest = (options?: {
           }),
         ),
         Layer.provide(
+          Layer.mock(LinearOAuth)({
+            buildAuthorizationUrl: Effect.succeed({ url: "https://linear.app/oauth/authorize" }),
+            completeAuthorizationCodeFlow: () => Effect.die("unused"),
+            getAccessToken: Effect.succeed(null),
+            refreshWorkspaceToken: () => Effect.die("unused"),
+            ...options?.layers?.linearOAuth,
+          }),
+        ),
+        Layer.provide(
           Layer.mock(LinearClient)({
             createAgentActivity: () => Effect.succeed({ activityId: "activity-1" }),
             fetchIssue: () => Effect.die("unused"),
@@ -553,6 +564,64 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("redirects /oauth/authorize through the Linear OAuth service", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({
+        layers: {
+          linearOAuth: {
+            buildAuthorizationUrl: Effect.succeed({
+              url: "https://linear.app/oauth/authorize?client_id=test-client",
+            }),
+          },
+        },
+      });
+
+      const url = yield* getHttpServerUrl("/oauth/authorize");
+      const response = yield* Effect.promise(() => fetch(url, { redirect: "manual" }));
+
+      assert.equal(response.status, 302);
+      assert.equal(
+        response.headers.get("location"),
+        "https://linear.app/oauth/authorize?client_id=test-client",
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("completes the Cyrus-style Linear callback route", () =>
+    Effect.gen(function* () {
+      const handledCodes: Array<string> = [];
+      yield* buildAppUnderTest({
+        layers: {
+          linearOAuth: {
+            completeAuthorizationCodeFlow: (code) => {
+              handledCodes.push(code);
+              return Effect.succeed({
+                workspace: {
+                  id: "workspace-1",
+                  name: "Acme",
+                  slug: "acme",
+                  accessToken: "lin_oauth_access",
+                  refreshToken: "lin_oauth_refresh",
+                  tokenType: "Bearer",
+                  scope: "write,app:assignable,app:mentionable",
+                  expiresAt: "2026-04-05T00:00:00.000Z",
+                  installedAt: "2026-04-05T00:00:00.000Z",
+                  updatedAt: "2026-04-05T00:00:00.000Z",
+                },
+              });
+            },
+          },
+        },
+      });
+
+      const response = yield* HttpClient.get("/callback?code=test-code");
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(handledCodes, ["test-code"]);
+      assert.include(yield* response.text, "Linear authorized successfully");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("redirects to dev URL when configured", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest({
@@ -631,6 +700,45 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const response = yield* HttpClient.get(`/attachments/${attachmentId}`);
       assert.equal(response.status, 200);
       assert.equal(yield* response.text, "attachment-ok");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("accepts Cyrus-compatible POST /webhook alias requests", () =>
+    Effect.gen(function* () {
+      const deliveries: Array<string> = [];
+      yield* buildAppUnderTest({
+        layers: {
+          serverSettings: {
+            getSettings: Effect.succeed({
+              ...DEFAULT_SERVER_SETTINGS,
+              linear: {
+                ...DEFAULT_SERVER_SETTINGS.linear,
+                enabled: true,
+              },
+            }),
+          },
+          linearWebhookHandler: {
+            handleWebhook: ({ rawBody }) => {
+              deliveries.push(new TextDecoder().decode(rawBody));
+              return Effect.void;
+            },
+          },
+        },
+      });
+
+      const url = yield* getHttpServerUrl("/webhook");
+      const response = yield* Effect.promise(() =>
+        fetch(url, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ ok: true }),
+        }),
+      );
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(deliveries, ['{"ok":true}']);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

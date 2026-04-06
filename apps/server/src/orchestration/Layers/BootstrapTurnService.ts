@@ -118,7 +118,8 @@ const makeBootstrapTurnService = Effect.gen(function* () {
     parentThreadId: ThreadId,
   ) {
     const settings = yield* serverSettings.getSettings;
-    const linearApiToken = settings.linear.apiToken.trim();
+    const linearApiToken =
+      settings.linear.apiToken.trim() || settings.linear.oauth.workspace?.accessToken.trim() || "";
     if (!linearApiToken) {
       return;
     }

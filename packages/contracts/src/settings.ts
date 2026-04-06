@@ -186,6 +186,30 @@ export const ServerSettingsPatch = Schema.Struct({
       webhookSecret: Schema.optionalKey(Schema.String),
       apiToken: Schema.optionalKey(Schema.String),
       verificationMode: Schema.optionalKey(LinearSettings.fields.verificationMode),
+      oauth: Schema.optionalKey(
+        Schema.Struct({
+          clientId: Schema.optionalKey(Schema.String),
+          clientSecret: Schema.optionalKey(Schema.String),
+          baseUrl: Schema.optionalKey(Schema.String),
+          scopes: Schema.optionalKey(Schema.Array(Schema.String)),
+          workspace: Schema.optionalKey(
+            Schema.NullOr(
+              Schema.Struct({
+                id: Schema.String,
+                name: Schema.optionalKey(Schema.String),
+                slug: Schema.optionalKey(Schema.String),
+                accessToken: Schema.String,
+                refreshToken: Schema.optionalKey(Schema.String),
+                tokenType: Schema.optionalKey(Schema.String),
+                scope: Schema.optionalKey(Schema.String),
+                expiresAt: Schema.optionalKey(Schema.String),
+                installedAt: Schema.String,
+                updatedAt: Schema.String,
+              }),
+            ),
+          ),
+        }),
+      ),
     }),
   ),
   linearProjectMappings: Schema.optionalKey(

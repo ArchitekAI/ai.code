@@ -47,6 +47,7 @@ Docs:
 
 ## Reference Repos
 
+- `.cyrus-ref/`: Local clone of the Cyrus repo. Treat this as the primary parity reference for Linear, Slack, orchestration, and auth behavior before consulting summaries or external docs.
 - Open-source Codex repo: https://github.com/openai/codex
 - Codex-Monitor (Tauri, feature-complete, strong reference implementation): https://github.com/Dimillian/CodexMonitor
 

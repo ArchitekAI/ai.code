@@ -11,11 +11,39 @@ import {
 export const LinearVerificationMode = Schema.Literals(["direct", "proxy"]);
 export type LinearVerificationMode = typeof LinearVerificationMode.Type;
 
+export const DEFAULT_LINEAR_OAUTH_SCOPES = ["write", "app:assignable", "app:mentionable"] as const;
+
+export const LinearOAuthWorkspace = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  name: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
+  slug: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
+  accessToken: TrimmedNonEmptyString,
+  refreshToken: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
+  tokenType: TrimmedString.pipe(Schema.withDecodingDefault(() => "Bearer")),
+  scope: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
+  expiresAt: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
+  installedAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+export type LinearOAuthWorkspace = typeof LinearOAuthWorkspace.Type;
+
+export const LinearOAuthSettings = Schema.Struct({
+  clientId: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
+  clientSecret: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
+  baseUrl: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
+  scopes: Schema.Array(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(() => [...DEFAULT_LINEAR_OAUTH_SCOPES]),
+  ),
+  workspace: Schema.NullOr(LinearOAuthWorkspace).pipe(Schema.withDecodingDefault(() => null)),
+});
+export type LinearOAuthSettings = typeof LinearOAuthSettings.Type;
+
 export const LinearSettings = Schema.Struct({
   enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
   webhookSecret: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
   apiToken: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
   verificationMode: LinearVerificationMode.pipe(Schema.withDecodingDefault(() => "direct")),
+  oauth: LinearOAuthSettings.pipe(Schema.withDecodingDefault(() => ({}))),
 });
 export type LinearSettings = typeof LinearSettings.Type;
 
@@ -241,5 +269,17 @@ export class LinearActivitySinkError extends Schema.TaggedErrorClass<LinearActiv
 ) {
   override get message(): string {
     return `Linear activity sink failed: ${this.detail}`;
+  }
+}
+
+export class LinearOAuthError extends Schema.TaggedErrorClass<LinearOAuthError>()(
+  "LinearOAuthError",
+  {
+    detail: Schema.String,
+    cause: Schema.optional(Schema.Defect),
+  },
+) {
+  override get message(): string {
+    return `Linear OAuth failed: ${this.detail}`;
   }
 }
