@@ -24,6 +24,28 @@ For each entry, capture:
 
 ## 2026-04-06
 
+### Cyrus-style Linear action/result feed formatting
+
+- Status: Local-only
+- Merge risk: Medium
+- User context: The user compared Vevin against Jevin/Cyrus and found the Linear issue feed too vague. Vevin was emitting repetitive generic entries like "Running Ran command started..." instead of the richer action/result trail Cyrus shows.
+- Why: The provider runtime already captured detailed command and MCP payloads, but the orchestration projection discarded that data before the Linear sink could format it. This fork now preserves the provider payload and formats Linear activities more like Cyrus.
+- Behavior:
+  - Tool lifecycle projections now retain the original provider payload for both `tool.started` and `tool.completed`.
+  - The Linear activity sink now suppresses noisy command/tool progress churn and emits durable Cyrus-style action/result entries for completed command and MCP tool calls.
+  - Command executions now render as `Bash` actions with the command as the parameter and command output as the result.
+  - MCP tool calls now render with a humanized tool name plus a meaningful parameter/result extracted from tool arguments and structured output.
+  - Reconnect-style transient warnings are dropped from the durable Linear timeline.
+  - Plan updates now render as readable checklist-style thoughts instead of the generic `Plan updated` text.
+  - Turn start now uses the Cyrus-style `Analyzing your request...` ephemeral banner.
+- Files:
+  - `apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts`
+  - `apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.test.ts`
+  - `apps/server/src/linear/Layers/LinearActivityFormatter.ts`
+  - `apps/server/src/linear/Layers/LinearActivitySink.ts`
+  - `apps/server/src/linear/Layers/LinearActivitySink.test.ts`
+- Notes: This intentionally prefers a smaller number of high-signal durable activities over raw provider churn in the Linear issue feed, matching Cyrus behavior more closely than the earlier fork implementation.
+
 ### Cyrus-style Linear session completion guidance and stop responses
 
 - Status: Local-only
@@ -277,3 +299,15 @@ For each entry, capture:
   - `apps/web/src/components/chat/ChatHeader.tsx` — removed `md:hidden` from trigger
   - `apps/web/src/components/Sidebar.tsx` — removed trigger from sidebar header
 - Notes: The handler lives in `AppSidebarLayout` (not `ChatView`) so it works on all routes, not just when a thread is active. It uses capture-phase event listening so the shortcut works even when the Lexical composer editor has focus. Uses the same keybinding system as `diff.toggle` (`mod+d`), so it supports server-side reconfiguration. The server auto-syncs the new default binding to existing config files on startup.
+
+### Hide raw command churn from the T3 work log
+
+- Status: Local-only
+- Merge risk: Low
+- User context: The user wanted Vevin's visible activity trail to feel much closer to Jevin/Cyrus. Raw `Ran command` rows made the work log noisy even when the underlying orchestration and shipping flow succeeded.
+- Why: Command-by-command shell output is still useful for internal orchestration, but it makes the user-facing work log much noisier than Cyrus's higher-signal issue/session timeline.
+- Behavior: The web work log now drops `command_execution` tool lifecycle rows while keeping plans, file changes, MCP/tool milestones, and terminal responses visible.
+- Files:
+  - `apps/web/src/session-logic.ts`
+  - `apps/web/src/session-logic.test.ts`
+- Notes: This only changes presentation. The underlying activities are still persisted for debugging and server-side orchestration.
