@@ -28,10 +28,12 @@
     "@effect/platform-node": "catalog:",
     "@effect/sql-sqlite-bun": "catalog:",
     "@linear/sdk": "^80.1.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@pierre/diffs": "^1.1.0-beta.16",
     "effect": "catalog:",
     "node-pty": "^1.1.0",
-    "open": "^10.1.0"
+    "open": "^10.1.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@effect/language-service": "catalog:",

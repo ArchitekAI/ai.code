@@ -3,12 +3,16 @@ import {
   EventId,
   type OrchestrationCommand,
   OrchestrationDispatchCommandError,
+  ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
-import { Cause, Effect, Layer, Schema } from "effect";
+import { Cause, Effect, FileSystem, Layer, Path, Schema } from "effect";
 
 import { GitCore } from "../../git/Services/GitCore.ts";
+import { ServerConfig } from "../../config.ts";
+import { McpContextRegistry } from "../../mcp/Services/McpContextRegistry.ts";
 import { ProjectSetupScriptRunner } from "../../project/Services/ProjectSetupScriptRunner.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   BootstrapTurnService,
@@ -18,10 +22,52 @@ import {
 const serverCommandId = (tag: string): CommandId =>
   CommandId.makeUnsafe(`server:${tag}:${crypto.randomUUID()}`);
 
+const buildLinearMcpConfig = (input: {
+  readonly linearApiToken: string;
+  readonly port: number;
+  readonly authToken: string | undefined;
+  readonly contextId: string;
+}) =>
+  JSON.stringify(
+    {
+      mcpServers: {
+        linear: {
+          type: "http",
+          url: "https://mcp.linear.app/mcp",
+          headers: {
+            Authorization: `Bearer ${input.linearApiToken}`,
+          },
+        },
+        "t3-tools": {
+          type: "http",
+          url: `http://127.0.0.1:${input.port}/mcp/t3-tools`,
+          headers: {
+            "x-t3-mcp-context-id": input.contextId,
+            ...(input.authToken ? { Authorization: `Bearer ${input.authToken}` } : {}),
+          },
+        },
+        "t3-docs": {
+          type: "http",
+          url: `http://127.0.0.1:${input.port}/mcp/t3-docs`,
+          headers: {
+            ...(input.authToken ? { Authorization: `Bearer ${input.authToken}` } : {}),
+          },
+        },
+      },
+    },
+    null,
+    2,
+  ) + "\n";
+
 const makeBootstrapTurnService = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const git = yield* GitCore;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const projectSetupScriptRunner = yield* ProjectSetupScriptRunner;
+  const serverConfig = yield* ServerConfig;
+  const serverSettings = yield* ServerSettingsService;
+  const mcpContextRegistry = yield* McpContextRegistry;
 
   const appendSetupScriptActivity = (input: {
     readonly threadId: ThreadId;
@@ -65,6 +111,39 @@ const makeBootstrapTurnService = Effect.gen(function* () {
           cause,
         });
   };
+
+  const writeLinearMcpConfigToWorktree = Effect.fn("writeLinearMcpConfigToWorktree")(function* (
+    worktreePath: string,
+    projectId: ProjectId,
+    parentThreadId: ThreadId,
+  ) {
+    const settings = yield* serverSettings.getSettings;
+    const linearApiToken = settings.linear.apiToken.trim();
+    if (!linearApiToken) {
+      return;
+    }
+
+    const contextId = `${projectId}:${parentThreadId}`;
+    // Keep a stable per-thread MCP context so child session creation can map back to the parent.
+    yield* mcpContextRegistry.register({
+      contextId,
+      projectId,
+      parentThreadId,
+    });
+
+    const configContents = buildLinearMcpConfig({
+      linearApiToken,
+      port: serverConfig.port,
+      authToken: serverConfig.authToken,
+      contextId,
+    });
+    const codexConfigDir = path.join(worktreePath, ".codex");
+    // Mirror the same config into both locations so Claude picks up `.mcp.json`
+    // and Codex project tooling still sees a colocated config file if it expects one.
+    yield* fileSystem.makeDirectory(codexConfigDir, { recursive: true });
+    yield* fileSystem.writeFileString(path.join(worktreePath, ".mcp.json"), configContents);
+    yield* fileSystem.writeFileString(path.join(codexConfigDir, "mcp.json"), configContents);
+  });
 
   const dispatchBootstrapTurnStart = (
     command: Extract<OrchestrationCommand, { type: "thread.turn.start" }>,
@@ -230,6 +309,19 @@ const makeBootstrapTurnService = Effect.gen(function* () {
             path: null,
           });
           targetWorktreePath = worktree.worktree.path;
+          if (bootstrap.prepareWorktree.writeLinearMcpConfig) {
+            // Linear-triggered sessions need project-local MCP config before provider startup.
+            if (!targetProjectId) {
+              return yield* new OrchestrationDispatchCommandError({
+                message: "Cannot write Linear MCP config without a project id.",
+              });
+            }
+            yield* writeLinearMcpConfigToWorktree(
+              targetWorktreePath,
+              targetProjectId,
+              command.threadId,
+            );
+          }
           yield* orchestrationEngine.dispatch({
             type: "thread.meta.update",
             commandId: serverCommandId("bootstrap-thread-meta-update"),

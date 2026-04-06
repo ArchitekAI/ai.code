@@ -305,7 +305,7 @@ const makeServerRuntimeStartup = Effect.gen(function* () {
       yield* runStartupPhase(
         "settings.linear-overrides",
         serverSettings
-          .updateSettings({
+          .applyRuntimeOverrides({
             linear: serverConfig.linearSettingsOverrides,
           })
           .pipe(

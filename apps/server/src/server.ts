@@ -51,9 +51,16 @@ import { WorkspacePathsLive } from "./workspace/Layers/WorkspacePaths";
 import { ProjectSetupScriptRunnerLive } from "./project/Layers/ProjectSetupScriptRunner";
 import { LinearActivitySinkLive } from "./linear/Layers/LinearActivitySink";
 import { LinearClientLive } from "./linear/Layers/LinearClient";
+import { LinearPromptAssemblerLive } from "./linear/Layers/LinearPromptAssembler";
 import { LinearSessionRegistryLive } from "./linear/Layers/LinearSessionRegistry";
 import { LinearWebhookHandlerLive } from "./linear/Layers/LinearWebhookHandler";
 import { ObservabilityLive } from "./observability/Layers/Observability";
+import { McpContextRegistryLive } from "./mcp/Layers/McpContextRegistry";
+import { ThreadRelationshipRegistryLive } from "./mcp/Layers/ThreadRelationshipRegistry";
+import { ChildCompletionReactorLive } from "./mcp/Layers/ChildCompletionReactor";
+import { mcpToolsRouteLayer } from "./mcp/Layers/McpToolsRoute";
+import { mcpDocsRouteLayer } from "./mcp/Layers/McpDocsRoute";
+import { ToolPolicyResolverLive } from "./provider/Layers/ToolPolicyResolver";
 
 const PtyAdapterLive = Layer.unwrap(
   Effect.gen(function* () {
@@ -109,6 +116,7 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(ProviderCommandReactorLive),
   Layer.provideMerge(CheckpointReactorLive),
   Layer.provideMerge(LinearActivitySinkLive),
+  Layer.provideMerge(ChildCompletionReactorLive),
   Layer.provideMerge(RuntimeReceiptBusLive),
 );
 
@@ -183,6 +191,11 @@ const LinearSessionRegistryRuntimeLive = LinearSessionRegistryLive.pipe(
   Layer.provide(PersistenceLayerLive),
 );
 
+const ThreadRelationshipRegistryRuntimeLive = ThreadRelationshipRegistryLive.pipe(
+  // Parent-child relationships are persisted so webhook delivery can reconnect sessions.
+  Layer.provide(PersistenceLayerLive),
+);
+
 const TerminalLayerLive = TerminalManagerLive.pipe(Layer.provide(PtyAdapterLive));
 
 const ProjectSetupScriptRuntimeLive = ProjectSetupScriptRunnerLive.pipe(
@@ -233,12 +246,16 @@ const RuntimeDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(KeybindingsLive),
   Layer.provideMerge(BootstrapTurnRuntimeLive),
   Layer.provideMerge(LinearClientLive),
+  Layer.provideMerge(LinearPromptAssemblerLive),
   Layer.provideMerge(LinearSessionRegistryRuntimeLive),
+  Layer.provideMerge(McpContextRegistryLive),
+  Layer.provideMerge(ThreadRelationshipRegistryRuntimeLive),
+  Layer.provideMerge(ToolPolicyResolverLive),
   Layer.provideMerge(ProviderRegistryLive),
   Layer.provideMerge(ServerSettingsLive),
   Layer.provideMerge(WorkspaceLayerLive),
   Layer.provideMerge(ProjectFaviconResolverLive),
-
+).pipe(
   // Misc.
   Layer.provideMerge(AnalyticsServiceLayerLive),
   Layer.provideMerge(OpenLive),
@@ -258,6 +275,8 @@ const RuntimeServicesLive = Layer.mergeAll(
 export const makeRoutesLayer = Layer.mergeAll(
   attachmentsRouteLayer,
   linearWebhookRouteLayer,
+  mcpDocsRouteLayer,
+  mcpToolsRouteLayer,
   otlpTracesProxyRouteLayer,
   projectFaviconRouteLayer,
   websocketRpcRouteLayer,

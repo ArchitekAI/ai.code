@@ -115,6 +115,14 @@ function makeMutableServerSettingsService(
           yield* PubSub.publish(changes, next);
           return next;
         }),
+      applyRuntimeOverrides: (patch) =>
+        Effect.gen(function* () {
+          const current = yield* Ref.get(settingsRef);
+          const next = Schema.decodeSync(ServerSettings)(deepMerge(current, patch));
+          yield* Ref.set(settingsRef, next);
+          yield* PubSub.publish(changes, next);
+          return next;
+        }),
       streamChanges: Stream.fromPubSub(changes),
     } satisfies ServerSettingsShape;
   });

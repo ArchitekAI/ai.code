@@ -53,6 +53,7 @@ import { OrchestrationReactorLive } from "../src/orchestration/Layers/Orchestrat
 import { ProviderCommandReactorLive } from "../src/orchestration/Layers/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionLive } from "../src/orchestration/Layers/ProviderRuntimeIngestion.ts";
 import { LinearActivitySink } from "../src/linear/Services/LinearActivitySink.ts";
+import { ChildCompletionReactor } from "../src/mcp/Services/ChildCompletionReactor.ts";
 import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
@@ -337,6 +338,12 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(
         Layer.succeed(LinearActivitySink, {
           // Integration harnesses do not need outbound Linear side effects.
+          start: () => Effect.void,
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.succeed(ChildCompletionReactor, {
+          // Harness flows do not delegate child sessions, so keep the reactor inert.
           start: () => Effect.void,
         }),
       ),

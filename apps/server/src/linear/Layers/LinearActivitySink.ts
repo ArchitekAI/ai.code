@@ -1,4 +1,4 @@
-import { type OrchestrationEvent } from "@t3tools/contracts";
+import { type OrchestrationEvent, type OrchestrationThreadActivity } from "@t3tools/contracts";
 import { Effect, Layer, Stream } from "effect";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
@@ -11,6 +11,139 @@ import {
 
 const latestEntry = <T extends { readonly createdAt: string }>(entries: ReadonlyArray<T>) =>
   entries.toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)).at(-1);
+
+function readActivityDetail(activity: OrchestrationThreadActivity): string | undefined {
+  if (!activity.payload || typeof activity.payload !== "object") {
+    return undefined;
+  }
+
+  const payload = activity.payload as { detail?: unknown; message?: unknown };
+  if (typeof payload.detail === "string" && payload.detail.trim().length > 0) {
+    return payload.detail.trim();
+  }
+  if (typeof payload.message === "string" && payload.message.trim().length > 0) {
+    return payload.message.trim();
+  }
+  return undefined;
+}
+
+function activityKindToLinearContent(activity: OrchestrationThreadActivity) {
+  const detail = readActivityDetail(activity);
+
+  switch (activity.kind) {
+    case "tool.started":
+      return {
+        content: {
+          type: "thought",
+          body: `Running ${activity.summary}...`,
+        },
+        ephemeral: true,
+      } as const;
+    case "tool.updated":
+      return {
+        content: {
+          type: "thought",
+          body: detail ? `${activity.summary}: ${detail}` : activity.summary,
+        },
+        ephemeral: true,
+      } as const;
+    case "tool.completed":
+      return {
+        content: {
+          type: "action",
+          action: activity.summary,
+          parameter: detail ?? "Completed",
+        },
+        ephemeral: true,
+      } as const;
+    case "task.started":
+      return {
+        content: {
+          type: "thought",
+          body: activity.summary,
+        },
+        ephemeral: false,
+      } as const;
+    case "task.progress":
+      return {
+        content: {
+          type: "thought",
+          body: detail ? `${activity.summary}: ${detail}` : activity.summary,
+        },
+        ephemeral: true,
+      } as const;
+    case "task.completed":
+      return {
+        content: {
+          type: "thought",
+          body: detail ? `${activity.summary}: ${detail}` : activity.summary,
+        },
+        ephemeral: false,
+      } as const;
+    case "approval.requested":
+      return {
+        content: {
+          type: "thought",
+          body: `Waiting for approval: ${activity.summary}`,
+        },
+        ephemeral: true,
+      } as const;
+    case "approval.resolved":
+      return {
+        content: {
+          type: "thought",
+          body: "Approval resolved",
+        },
+        ephemeral: true,
+      } as const;
+    case "runtime.error":
+      return {
+        content: {
+          type: "error",
+          body: detail ?? activity.summary,
+        },
+        ephemeral: false,
+      } as const;
+    case "runtime.warning":
+      return {
+        content: {
+          type: "thought",
+          body: `Warning: ${detail ?? activity.summary}`,
+        },
+        ephemeral: true,
+      } as const;
+    case "turn.plan.updated":
+      return {
+        content: {
+          type: "thought",
+          body: `Plan: ${activity.summary}`,
+        },
+        ephemeral: true,
+      } as const;
+    case "prompt-mode.entered":
+      return {
+        content: {
+          type: "thought",
+          body: activity.summary,
+        },
+        ephemeral: false,
+      } as const;
+    case "user-input.requested":
+      return {
+        content: {
+          type: "thought",
+          body: "Waiting for user input...",
+        },
+        ephemeral: true,
+      } as const;
+    case "context-compaction":
+    case "context-window.updated":
+    case "user-input.resolved":
+      return null;
+    default:
+      return null;
+  }
+}
 
 const toLinearActivity = (event: OrchestrationEvent) => {
   switch (event.type) {
@@ -41,17 +174,49 @@ const toLinearActivity = (event: OrchestrationEvent) => {
       } as const;
     case "thread.turn-diff-completed": {
       const files = event.payload.files.map((file) => file.path).join("\n");
+      const additions = event.payload.files.reduce((total, file) => total + file.additions, 0);
+      const deletions = event.payload.files.reduce((total, file) => total + file.deletions, 0);
       return {
         threadId: event.payload.threadId,
         content: {
           type: "action",
-          action: `Changed ${event.payload.files.length} file${event.payload.files.length === 1 ? "" : "s"}`,
+          action: `Changed ${event.payload.files.length} file${event.payload.files.length === 1 ? "" : "s"} (+${additions} -${deletions})`,
           parameter: files || "No files changed",
         },
         ephemeral: true,
       } as const;
     }
+    case "thread.activity-appended": {
+      const activity = activityKindToLinearContent(event.payload.activity);
+      if (!activity) {
+        return null;
+      }
+      return {
+        threadId: event.payload.threadId,
+        ...activity,
+      } as const;
+    }
     case "thread.session-set":
+      if (event.payload.session.status === "running") {
+        return {
+          threadId: event.payload.threadId,
+          content: {
+            type: "thought",
+            body: "Session started",
+          },
+          ephemeral: false,
+        } as const;
+      }
+      if (event.payload.session.status === "stopped") {
+        return {
+          threadId: event.payload.threadId,
+          content: {
+            type: "thought",
+            body: "Session completed",
+          },
+          ephemeral: false,
+        } as const;
+      }
       if (event.payload.session.status !== "error" || !event.payload.session.lastError) {
         return null;
       }

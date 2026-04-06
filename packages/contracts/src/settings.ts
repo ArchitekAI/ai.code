@@ -194,10 +194,31 @@ export const ServerSettingsPatch = Schema.Struct({
       mappings: Schema.optionalKey(
         Schema.Array(
           Schema.Struct({
+            organizationId: Schema.optionalKey(Schema.String),
             teamKey: Schema.optionalKey(Schema.String),
             labelName: Schema.optionalKey(Schema.String),
             workspaceRoot: Schema.String,
             baseBranch: Schema.optionalKey(Schema.String),
+            routeKey: Schema.optionalKey(Schema.String),
+            routeAliases: Schema.optionalKey(Schema.Array(Schema.String)),
+            routingLabels: Schema.optionalKey(Schema.Array(Schema.String)),
+            projectKeys: Schema.optionalKey(Schema.Array(Schema.String)),
+            promptLabels: Schema.optionalKey(
+              Schema.Struct({
+                builder: Schema.optionalKey(Schema.Array(Schema.String)),
+                debugger: Schema.optionalKey(Schema.Array(Schema.String)),
+                scoper: Schema.optionalKey(Schema.Array(Schema.String)),
+                orchestrator: Schema.optionalKey(Schema.Array(Schema.String)),
+                graphite: Schema.optionalKey(Schema.Array(Schema.String)),
+              }),
+            ),
+            toolPolicy: Schema.optionalKey(
+              Schema.Struct({
+                defaultAllowedToolsPreset: Schema.optionalKey(Schema.String),
+                defaultDisallowedTools: Schema.optionalKey(Schema.Array(Schema.String)),
+                promptDefaults: Schema.optionalKey(Schema.Unknown),
+              }),
+            ),
           }),
         ),
       ),

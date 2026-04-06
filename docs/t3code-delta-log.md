@@ -22,6 +22,79 @@ For each entry, capture:
 
 ## Active Deltas
 
+## 2026-04-05
+
+### T3 MCP child-orchestration mode for Linear sessions
+
+- Status: Local-only
+- Merge risk: High
+- User context: The user wanted Phase 1 of the Cyrus-style orchestrator mode plan implemented, including first-party MCP helpers, label-driven prompt modes, child session delegation, and parent verification flows inside T3 Code.
+- Why: Upstream `t3code` does not ship the fork-specific MCP surface or parent/child thread orchestration needed to run Linear-driven orchestrator workflows end to end.
+- Behavior:
+  - Linear-triggered worktrees now receive three MCP servers by default: hosted `linear`, local `t3-tools`, and local `t3-docs`.
+  - The server now exposes `/mcp/t3-tools` and `/mcp/t3-docs` endpoints so orchestrator prompts can create child Linear sessions, relate issues, upload files, search repo docs, and fetch project documentation without external Cyrus services.
+  - Parent/child thread relationships are persisted so a child completion or child-session failure can resume the parent thread with the child worktree mounted as an additional directory for verification.
+  - Linear prompt routing now supports `builder`, `debugger`, `scoper`, `orchestrator`, and `graphite-orchestrator`, including prompt-mode entry activity and prompt-type-specific tool allow/deny policy.
+  - Builder/debugger prompts now carry the Cyrus-style task-first guidance, while scoper/orchestrator modes append the shared todo-management extension so planning and verification instructions stay consistent across prompt types.
+  - Scoper now behaves more like a durable specification workflow, including Linear-document-oriented guidance and stricter non-implementation instructions, while builder/debugger now carry a closer Cyrus-style execution flow for reconnaissance, planning, and verification.
+  - `t3-docs` now indexes both fork docs and the Linear prompt templates so background sessions can inspect the local orchestration guidance they are expected to follow.
+  - Linear project mappings now carry repo routing aliases, project keys, routing labels, prompt labels, and tool-policy metadata so repo selection, prompt selection, and tool access resolve from the same source of truth.
+- Files:
+  - `apps/server/src/mcp/t3Tools.ts`
+  - `apps/server/src/mcp/t3Docs.ts`
+  - `apps/server/src/mcp/Layers/McpToolsRoute.ts`
+  - `apps/server/src/mcp/Layers/McpDocsRoute.ts`
+  - `apps/server/src/mcp/Layers/ChildCompletionReactor.ts`
+  - `apps/server/src/mcp/Layers/McpContextRegistry.ts`
+  - `apps/server/src/mcp/Layers/ThreadRelationshipRegistry.ts`
+  - `apps/server/src/linear/Layers/LinearWebhookHandler.ts`
+  - `apps/server/src/linear/Layers/LinearActivitySink.ts`
+  - `apps/server/src/linear/Layers/LinearPromptAssembler.ts`
+  - `apps/server/src/linear/prompts/scoper.md`
+  - `apps/server/src/linear/prompts/graphite-orchestrator.md`
+  - `apps/server/src/linear/prompts/todolist-system-prompt-extension.md`
+  - `apps/server/src/provider/Layers/ToolPolicyResolver.ts`
+  - `apps/server/src/orchestration/Layers/BootstrapTurnService.ts`
+  - `packages/contracts/src/linear.ts`
+  - `packages/contracts/src/orchestration.ts`
+  - `packages/contracts/src/provider.ts`
+  - `packages/contracts/src/settings.ts`
+- Notes: This delta adds new persisted state, local MCP HTTP routes, and prompt/tool-policy coupling that upstream does not know about. Merges touching Linear webhook handling, provider startup, or route assembly will need extra review.
+
+### Linear agent "brain" parity and provider-agnostic session context
+
+- Status: Local-only
+- Merge risk: High
+- User context: The user wanted Cyrus-style Linear agent orchestration in this fork, including rich issue context, better activity streaming, Linear MCP access, and lifecycle cleanup. During implementation, they explicitly pushed back on a Codex-only solution and asked that Claude be supported too.
+- Why: Linear-triggered sessions were previously little more than webhook plumbing. The fork now assembles a real task context, injects Linear tooling into the worktree, and keeps Linear users informed while work is happening.
+- Behavior:
+  - New Linear sessions build an enriched prompt from issue metadata, comment threads, repository/worktree context, and optional Linear agent guidance instead of sending only the bare issue description.
+  - Linear label selection chooses a fork-local system prompt template (`builder`, `debugger`, `orchestrator`) modeled after Cyrus. The selected prompt prefix is threaded through the provider turn flow for both Codex and Claude-backed sessions.
+  - Linear-triggered worktrees now receive Linear MCP configuration on disk so the agent can query and update Linear from inside the session. The config is mirrored to both `.mcp.json` and `.codex/mcp.json` so Claude-style and Codex-style project config discovery both work.
+  - Linear activity syncing now forwards structured orchestration activity updates, richer session lifecycle messages, and diff stats instead of only sparse start/finish events.
+  - Linear `Issue` update webhooks now stop active sessions when an issue reaches a terminal state and send a follow-up turn when the issue title or description changes mid-flight.
+- Files:
+  - `apps/server/src/linear/Layers/LinearPromptAssembler.ts`
+  - `apps/server/src/linear/Services/LinearPromptAssembler.ts`
+  - `apps/server/src/linear/prompts/builder.md`
+  - `apps/server/src/linear/prompts/debugger.md`
+  - `apps/server/src/linear/prompts/orchestrator.md`
+  - `apps/server/src/linear/Layers/LinearWebhookHandler.ts`
+  - `apps/server/src/linear/Layers/LinearWebhookHandler.test.ts`
+  - `apps/server/src/linear/Layers/LinearActivitySink.ts`
+  - `apps/server/src/linear/Layers/LinearClient.ts`
+  - `apps/server/src/linear/Services/LinearClient.ts`
+  - `apps/server/src/orchestration/Layers/BootstrapTurnService.ts`
+  - `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts`
+  - `apps/server/src/orchestration/decider.ts`
+  - `apps/server/src/provider/Layers/CodexAdapter.ts`
+  - `apps/server/src/provider/Layers/ClaudeAdapter.ts`
+  - `apps/server/src/codexAppServerManager.ts`
+  - `packages/contracts/src/linear.ts`
+  - `packages/contracts/src/orchestration.ts`
+  - `packages/contracts/src/provider.ts`
+- Notes: This is the deepest fork divergence in the current Linear integration and it crosses orchestration, provider dispatch, and prompt shaping. Upstream merges in these areas will need especially careful conflict resolution because the fork now depends on provider-agnostic system prompt threading and worktree-local MCP setup.
+
 ## 2026-04-04
 
 ### Linear webhook ingress for agent sessions

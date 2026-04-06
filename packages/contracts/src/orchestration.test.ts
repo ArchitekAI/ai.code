@@ -236,6 +236,32 @@ it.effect("accepts bootstrap metadata in thread.turn.start", () =>
   }),
 );
 
+it.effect("accepts prompt policy metadata in thread.turn.start", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeThreadTurnStartCommand({
+      type: "thread.turn.start",
+      commandId: "cmd-turn-policy",
+      threadId: "thread-1",
+      message: {
+        messageId: "msg-policy",
+        role: "user",
+        text: "review the child worktree",
+        attachments: [],
+      },
+      promptType: "orchestrator",
+      additionalDirectories: ["/tmp/worktrees/child-1"],
+      allowedTools: ["mcp__linear", "mcp__t3-tools"],
+      disallowedTools: ["Bash(rm:*)"],
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.strictEqual(parsed.promptType, "orchestrator");
+    assert.deepStrictEqual(parsed.additionalDirectories, ["/tmp/worktrees/child-1"]);
+    assert.deepStrictEqual(parsed.allowedTools, ["mcp__linear", "mcp__t3-tools"]);
+    assert.deepStrictEqual(parsed.disallowedTools, ["Bash(rm:*)"]);
+  }),
+);
+
 it.effect("decodes thread.created runtime mode for historical events", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeThreadCreatedPayload({
@@ -435,6 +461,27 @@ it.effect("decodes thread.turn-start-requested source proposed plan metadata whe
       threadId: "thread-1",
       planId: "plan-1",
     });
+  }),
+);
+
+it.effect("decodes thread.turn-start-requested prompt policy metadata when present", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeThreadTurnStartRequestedPayload({
+      threadId: "thread-1",
+      messageId: "msg-1",
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      promptType: "graphite-orchestrator",
+      additionalDirectories: ["/tmp/worktrees/child-2"],
+      allowedTools: ["mcp__linear", "mcp__t3-docs"],
+      disallowedTools: ["Bash(rm:*)"],
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.strictEqual(parsed.promptType, "graphite-orchestrator");
+    assert.deepStrictEqual(parsed.additionalDirectories, ["/tmp/worktrees/child-2"]);
+    assert.deepStrictEqual(parsed.allowedTools, ["mcp__linear", "mcp__t3-docs"]);
+    assert.deepStrictEqual(parsed.disallowedTools, ["Bash(rm:*)"]);
   }),
 );
 

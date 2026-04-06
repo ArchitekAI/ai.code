@@ -113,4 +113,19 @@ describe("ProviderSendTurnInput", () => {
     expect(parsed.modelSelection.options?.effort).toBe("ultrathink");
     expect(parsed.modelSelection.options?.fastMode).toBe(true);
   });
+
+  it("accepts prompt policy and additional directory fields", () => {
+    const parsed = decodeProviderSendTurnInput({
+      threadId: "thread-1",
+      promptType: "orchestrator",
+      additionalDirectories: ["/tmp/worktrees/child-1"],
+      allowedTools: ["mcp__linear", "mcp__t3-tools"],
+      disallowedTools: ["Bash(rm:*)"],
+    });
+
+    expect(parsed.promptType).toBe("orchestrator");
+    expect(parsed.additionalDirectories).toEqual(["/tmp/worktrees/child-1"]);
+    expect(parsed.allowedTools).toEqual(["mcp__linear", "mcp__t3-tools"]);
+    expect(parsed.disallowedTools).toEqual(["Bash(rm:*)"]);
+  });
 });
