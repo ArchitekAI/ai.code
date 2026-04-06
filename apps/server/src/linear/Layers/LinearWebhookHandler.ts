@@ -5,7 +5,6 @@ import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
-  LinearAgentSessionCreatedWebhook,
   type LinearAgentSessionCreatedWebhook as LinearAgentSessionCreatedWebhookPayload,
   LinearAgentSessionPromptedWebhook,
   type LinearAgentSessionPromptedWebhook as LinearAgentSessionPromptedWebhookPayload,
@@ -70,6 +69,143 @@ interface RepoDirective {
 function normalizeToken(value: string | undefined): string | null {
   const normalized = value?.trim().toLowerCase();
   return normalized && normalized.length > 0 ? normalized : null;
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function optionalStringValue(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function requiredStringValue(
+  record: Record<string, unknown>,
+  key: string,
+): Effect.Effect<string, LinearWebhookHandlerError> {
+  const value = record[key];
+  if (typeof value === "string" && value.trim().length > 0) {
+    return Effect.succeed(value);
+  }
+  return Effect.fail(
+    new LinearWebhookHandlerError({
+      detail: `Linear created webhook payload is missing ${key}.`,
+    }),
+  );
+}
+
+function decodeCreatedWebhookPayload(
+  payload: Record<string, unknown>,
+): Effect.Effect<LinearAgentSessionCreatedWebhookPayload, LinearWebhookHandlerError> {
+  return Effect.gen(function* () {
+    const type = yield* requiredStringValue(payload, "type");
+    const action = yield* requiredStringValue(payload, "action");
+    const createdAt = yield* requiredStringValue(payload, "createdAt");
+    const organizationId = yield* requiredStringValue(payload, "organizationId");
+    const agentSessionRecord = recordValue(payload.agentSession);
+
+    if (!agentSessionRecord) {
+      return yield* new LinearWebhookHandlerError({
+        detail: "Linear created webhook payload is missing agentSession.",
+      });
+    }
+
+    const issueRecord = recordValue(agentSessionRecord.issue);
+    if (!issueRecord) {
+      return yield* new LinearWebhookHandlerError({
+        detail: "Linear created webhook payload is missing agentSession.issue.",
+      });
+    }
+
+    const issueId = yield* requiredStringValue(issueRecord, "id");
+    const agentSessionId = yield* requiredStringValue(agentSessionRecord, "id");
+    const issueTeam = recordValue(issueRecord.team);
+    const commentRecord = recordValue(agentSessionRecord.comment);
+    const creatorRecord = recordValue(agentSessionRecord.creator);
+    const guidance =
+      Array.isArray(payload.guidance) && payload.guidance.length > 0
+        ? payload.guidance.flatMap((entry) => {
+            const guidanceRecord = recordValue(entry);
+            if (!guidanceRecord) {
+              return [];
+            }
+            const originRecord = recordValue(guidanceRecord.origin);
+            const teamRecord = originRecord ? recordValue(originRecord.team) : null;
+            return [
+              {
+                body: typeof guidanceRecord.body === "string" ? guidanceRecord.body : "",
+                ...(originRecord
+                  ? {
+                      origin: {
+                        ...(typeof originRecord.__typename === "string"
+                          ? { __typename: originRecord.__typename }
+                          : {}),
+                        ...(teamRecord && typeof teamRecord.displayName === "string"
+                          ? {
+                              team: {
+                                displayName: teamRecord.displayName,
+                              },
+                            }
+                          : {}),
+                      },
+                    }
+                  : {}),
+              },
+            ];
+          })
+        : undefined;
+
+    return {
+      type: type as "AgentSessionEvent",
+      action: action as "created",
+      createdAt,
+      organizationId,
+      agentSession: {
+        id: agentSessionId,
+        issue: {
+          id: issueId,
+          identifier: typeof issueRecord.identifier === "string" ? issueRecord.identifier : "",
+          title: typeof issueRecord.title === "string" ? issueRecord.title : "",
+          ...(typeof issueRecord.description === "string"
+            ? { description: issueRecord.description }
+            : {}),
+          ...(issueTeam && typeof issueTeam.key === "string"
+            ? { team: { key: issueTeam.key } }
+            : {}),
+        },
+        ...(typeof agentSessionRecord.issueId === "string"
+          ? { issueId: agentSessionRecord.issueId }
+          : {}),
+        ...(commentRecord
+          ? {
+              comment: {
+                id: typeof commentRecord.id === "string" ? commentRecord.id : "",
+                body: typeof commentRecord.body === "string" ? commentRecord.body : "",
+              },
+            }
+          : {}),
+        ...(creatorRecord && typeof creatorRecord.id === "string"
+          ? {
+              creator: {
+                id: creatorRecord.id,
+                ...(optionalStringValue(creatorRecord.name)
+                  ? { name: optionalStringValue(creatorRecord.name) }
+                  : {}),
+                ...(optionalStringValue(creatorRecord.displayName)
+                  ? { displayName: optionalStringValue(creatorRecord.displayName) }
+                  : {}),
+                ...(optionalStringValue(creatorRecord.email)
+                  ? { email: optionalStringValue(creatorRecord.email) }
+                  : {}),
+              },
+            }
+          : {}),
+      },
+      ...(guidance ? { guidance } : {}),
+    };
+  });
 }
 
 function normalizeTokenSet(values: ReadonlyArray<string>): Set<string> {
@@ -1158,17 +1294,9 @@ const makeLinearWebhookHandler = Effect.gen(function* () {
       const action = typeof payload.action === "string" ? payload.action : "";
 
       if (type === "AgentSessionEvent" && action === "created") {
-        const webhook = yield* Schema.decodeUnknownEffect(LinearAgentSessionCreatedWebhook)(
-          payload,
-        ).pipe(
-          Effect.mapError(
-            (cause) =>
-              new LinearWebhookHandlerError({
-                detail: "Linear created webhook payload did not match the expected schema.",
-                cause,
-              }),
-          ),
-        );
+        // Linear's created event currently includes nullable SDK fields that we do not depend on.
+        // Normalize only the data needed to bootstrap a session, mirroring Cyrus's looser handling.
+        const webhook = yield* decodeCreatedWebhookPayload(payload);
         yield* handleCreated(webhook);
         return;
       }

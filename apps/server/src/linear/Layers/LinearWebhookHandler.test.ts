@@ -98,6 +98,32 @@ const makeCreatedPayload = (linearSessionId: string) => ({
   },
 });
 
+const makeCreatedPayloadWithNullables = (linearSessionId: string) => ({
+  type: "AgentSessionEvent" as const,
+  action: "created" as const,
+  createdAt: now,
+  organizationId: "org-linear",
+  agentSession: {
+    id: linearSessionId,
+    issueId: null,
+    creator: null,
+    comment: null,
+    issue: {
+      id: "issue-1",
+      identifier: null,
+      title: null,
+      description: null,
+      team: null,
+    },
+  },
+  guidance: [
+    {
+      body: null,
+      origin: null,
+    },
+  ],
+});
+
 const makePromptedPayload = (body: string) => ({
   type: "AgentSessionEvent" as const,
   action: "prompted" as const,
@@ -398,6 +424,28 @@ it.layer(NodeServices.layer)("linear webhook handler", (it) => {
       assert.equal(harness.registeredSessions.length, 1);
       assert.equal(harness.registeredSessions[0]?.linearSessionId, "linear-session-new");
       assert.notEqual(harness.registeredSessions[0]?.threadId, staleThreadId);
+    }),
+  );
+
+  it.effect("accepts created webhooks that include nullable Linear SDK fields", () =>
+    Effect.gen(function* () {
+      const harness = makeHandlerLayer({
+        readModel: makeReadModel([]),
+      });
+
+      yield* runWebhook(harness.layer, makeCreatedPayloadWithNullables("linear-session-nullable"));
+
+      assert.equal(harness.commands.length, 1);
+      const command = harness.commands[0];
+      if (command?.type !== "thread.turn.start") {
+        throw new Error("Expected thread.turn.start command");
+      }
+
+      assert.equal(
+        command.message.text,
+        "new-session:ENG-1:/tmp/linear-project/feature/eng-1-fix-linear-webhook-parity",
+      );
+      assert.equal(harness.registeredSessions[0]?.linearSessionId, "linear-session-nullable");
     }),
   );
 
