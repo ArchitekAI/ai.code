@@ -25,24 +25,48 @@ const makeLinearWebhookRoute = (path: "/webhook" | "/webhook/linear") =>
 
       const rawBody = new Uint8Array(yield* request.arrayBuffer);
       const headers = request.headers as Record<string, string | undefined>;
+      const signature = getHeader(headers, LINEAR_WEBHOOK_SIGNATURE_HEADER);
+      const timestamp = getHeader(headers, LINEAR_WEBHOOK_TS_HEADER);
+      const authorization = getHeader(headers, "authorization");
+
+      // Log every delivery attempt so self-hosted debugging can confirm whether
+      // Linear is reaching the server before payload handling succeeds.
+      yield* Effect.logInfo("linear webhook request received", {
+        path,
+        contentLength: rawBody.byteLength,
+        hasSignature: !!signature,
+        hasTimestamp: !!timestamp,
+        hasAuthorization: !!authorization,
+      });
 
       return yield* linearWebhookHandler
         .handleWebhook({
           rawBody,
-          signature: getHeader(headers, LINEAR_WEBHOOK_SIGNATURE_HEADER),
-          timestamp: getHeader(headers, LINEAR_WEBHOOK_TS_HEADER),
-          authorization: getHeader(headers, "authorization"),
+          signature,
+          timestamp,
+          authorization,
         })
         .pipe(
+          Effect.tap(() =>
+            Effect.logInfo("linear webhook processed successfully", {
+              path,
+            }),
+          ),
           Effect.as(HttpServerResponse.empty({ status: 200 })),
           Effect.catch((error) => {
             if (Schema.is(LinearWebhookVerificationError)(error)) {
-              return Effect.succeed(HttpServerResponse.text(error.message, { status: 401 }));
+              return Effect.logWarning("linear webhook verification failed", {
+                path,
+                message: error.message,
+              }).pipe(Effect.as(HttpServerResponse.text(error.message, { status: 401 })));
             }
             const message = Schema.is(LinearWebhookHandlerError)(error)
               ? error.message
               : "Linear webhook handling failed.";
-            return Effect.succeed(HttpServerResponse.text(message, { status: 500 }));
+            return Effect.logWarning("linear webhook processing failed", {
+              path,
+              message,
+            }).pipe(Effect.as(HttpServerResponse.text(message, { status: 500 })));
           }),
         );
     }),
