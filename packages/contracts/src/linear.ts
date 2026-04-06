@@ -87,20 +87,22 @@ export const LinearProjectMappings = Schema.Struct({
 export type LinearProjectMappings = typeof LinearProjectMappings.Type;
 
 const LinearTeamWebhook = Schema.Struct({
-  key: TrimmedNonEmptyString,
+  key: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
 });
 
 const LinearIssueWebhook = Schema.Struct({
   id: TrimmedNonEmptyString,
-  identifier: TrimmedNonEmptyString,
-  title: TrimmedNonEmptyString,
+  // Linear agent-session webhooks are inconsistent here; we only need the issue id
+  // because the handler fetches the authoritative issue payload from the API.
+  identifier: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
+  title: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
   description: Schema.optional(TrimmedString),
-  team: LinearTeamWebhook,
+  team: Schema.optional(LinearTeamWebhook),
 });
 
 const LinearCommentWebhook = Schema.Struct({
-  id: TrimmedNonEmptyString,
-  body: TrimmedString,
+  id: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
+  body: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
 });
 
 const LinearUserWebhook = Schema.Struct({
@@ -120,12 +122,12 @@ const LinearGuidanceOriginWebhook = Schema.Struct({
 });
 
 const LinearGuidanceWebhook = Schema.Struct({
-  body: TrimmedString,
+  body: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
   origin: Schema.optional(LinearGuidanceOriginWebhook),
 });
 
 const LinearAgentActivityContentWebhook = Schema.Struct({
-  body: TrimmedString,
+  body: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
 });
 
 const LinearAgentActivityWebhook = Schema.Struct({
