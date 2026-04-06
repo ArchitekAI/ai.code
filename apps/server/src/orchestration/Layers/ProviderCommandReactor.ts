@@ -223,6 +223,15 @@ const make = Effect.gen(function* () {
     createdAt: string,
     options?: {
       readonly modelSelection?: ModelSelection;
+      readonly promptType?:
+        | "builder"
+        | "debugger"
+        | "scoper"
+        | "orchestrator"
+        | "graphite-orchestrator";
+      readonly additionalDirectories?: ReadonlyArray<string>;
+      readonly allowedTools?: ReadonlyArray<string>;
+      readonly disallowedTools?: ReadonlyArray<string>;
     },
   ) {
     const readModel = yield* orchestrationEngine.getReadModel();
@@ -270,6 +279,14 @@ const make = Effect.gen(function* () {
         ...(preferredProvider ? { provider: preferredProvider } : {}),
         ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
         modelSelection: desiredModelSelection,
+        ...(options?.promptType !== undefined ? { promptType: options.promptType } : {}),
+        ...(options?.additionalDirectories !== undefined
+          ? { additionalDirectories: [...options.additionalDirectories] }
+          : {}),
+        ...(options?.allowedTools !== undefined ? { allowedTools: [...options.allowedTools] } : {}),
+        ...(options?.disallowedTools !== undefined
+          ? { disallowedTools: [...options.disallowedTools] }
+          : {}),
         ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
         runtimeMode: desiredRuntimeMode,
       });
@@ -364,17 +381,33 @@ const make = Effect.gen(function* () {
     readonly attachments?: ReadonlyArray<ChatAttachment>;
     readonly modelSelection?: ModelSelection;
     readonly interactionMode?: "default" | "plan";
+    readonly promptType?:
+      | "builder"
+      | "debugger"
+      | "scoper"
+      | "orchestrator"
+      | "graphite-orchestrator";
+    readonly additionalDirectories?: ReadonlyArray<string>;
+    readonly allowedTools?: ReadonlyArray<string>;
+    readonly disallowedTools?: ReadonlyArray<string>;
+    readonly systemPromptPrefix?: string;
     readonly createdAt: string;
   }) {
     const thread = yield* resolveThread(input.threadId);
     if (!thread) {
       return;
     }
-    yield* ensureSessionForThread(
-      input.threadId,
-      input.createdAt,
-      input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {},
-    );
+    yield* ensureSessionForThread(input.threadId, input.createdAt, {
+      ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
+      ...(input.promptType !== undefined ? { promptType: input.promptType } : {}),
+      ...(input.additionalDirectories !== undefined
+        ? { additionalDirectories: [...input.additionalDirectories] }
+        : {}),
+      ...(input.allowedTools !== undefined ? { allowedTools: [...input.allowedTools] } : {}),
+      ...(input.disallowedTools !== undefined
+        ? { disallowedTools: [...input.disallowedTools] }
+        : {}),
+    });
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
@@ -404,9 +437,20 @@ const make = Effect.gen(function* () {
     yield* providerService.sendTurn({
       threadId: input.threadId,
       ...(normalizedInput ? { input: normalizedInput } : {}),
+      ...(input.systemPromptPrefix !== undefined
+        ? { systemPromptPrefix: input.systemPromptPrefix }
+        : {}),
       ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
       ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
+      ...(input.promptType !== undefined ? { promptType: input.promptType } : {}),
+      ...(input.additionalDirectories !== undefined
+        ? { additionalDirectories: [...input.additionalDirectories] }
+        : {}),
+      ...(input.allowedTools !== undefined ? { allowedTools: [...input.allowedTools] } : {}),
+      ...(input.disallowedTools !== undefined
+        ? { disallowedTools: [...input.disallowedTools] }
+        : {}),
     });
   });
 
@@ -573,6 +617,19 @@ const make = Effect.gen(function* () {
         ? { modelSelection: event.payload.modelSelection }
         : {}),
       interactionMode: event.payload.interactionMode,
+      ...(event.payload.promptType !== undefined ? { promptType: event.payload.promptType } : {}),
+      ...(event.payload.additionalDirectories !== undefined
+        ? { additionalDirectories: event.payload.additionalDirectories }
+        : {}),
+      ...(event.payload.allowedTools !== undefined
+        ? { allowedTools: event.payload.allowedTools }
+        : {}),
+      ...(event.payload.disallowedTools !== undefined
+        ? { disallowedTools: event.payload.disallowedTools }
+        : {}),
+      ...(event.payload.systemPromptPrefix !== undefined
+        ? { systemPromptPrefix: event.payload.systemPromptPrefix }
+        : {}),
       createdAt: event.payload.createdAt,
     }).pipe(
       Effect.catchCause((cause) =>

@@ -1834,6 +1834,11 @@ describe("ProviderRuntimeIngestion", () => {
         status: "in_progress",
         title: "Read file",
         detail: "/tmp/file.ts",
+        data: {
+          item: {
+            command: "/bin/bash -lc 'cat /tmp/file.ts'",
+          },
+        },
       },
     });
 
@@ -1853,6 +1858,70 @@ describe("ProviderRuntimeIngestion", () => {
         (activity: ProviderRuntimeTestActivity) => activity.kind === "tool.started",
       ),
     ).toBe(true);
+    expect(
+      thread.activities.find(
+        (activity: ProviderRuntimeTestActivity) => activity.kind === "tool.started",
+      )?.payload,
+    ).toMatchObject({
+      data: {
+        item: {
+          command: "/bin/bash -lc 'cat /tmp/file.ts'",
+        },
+      },
+    });
+  });
+
+  it("preserves provider payload data for tool.completed activities", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-tool-completed"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-10"),
+      payload: {
+        itemType: "mcp_tool_call",
+        title: "MCP tool call",
+        detail: "github_create_pull_request",
+        data: {
+          item: {
+            tool: "github_create_pull_request",
+            result: {
+              structuredContent: {
+                url: "https://github.com/ArchitekAI/ai.code/pull/3",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) =>
+          activity.id === "evt-tool-completed" && activity.kind === "tool.completed",
+      ),
+    );
+
+    expect(
+      thread.activities.find(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-tool-completed",
+      )?.payload,
+    ).toMatchObject({
+      data: {
+        item: {
+          tool: "github_create_pull_request",
+          result: {
+            structuredContent: {
+              url: "https://github.com/ArchitekAI/ai.code/pull/3",
+            },
+          },
+        },
+      },
+    });
   });
 
   it("consumes P1 runtime events into thread metadata, diff checkpoints, and activities", async () => {

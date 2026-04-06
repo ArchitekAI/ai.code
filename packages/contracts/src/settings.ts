@@ -2,6 +2,7 @@ import { Effect } from "effect";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import { TrimmedNonEmptyString, TrimmedString } from "./baseSchemas";
+import { LinearProjectMappings, LinearSettings } from "./linear";
 import {
   ClaudeModelOptions,
   CodexModelOptions,
@@ -95,6 +96,8 @@ export const ServerSettings = Schema.Struct({
     claudeAgent: ClaudeSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   }).pipe(Schema.withDecodingDefault(() => ({}))),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(() => ({}))),
+  linear: LinearSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+  linearProjectMappings: LinearProjectMappings.pipe(Schema.withDecodingDefault(() => ({}))),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -175,6 +178,74 @@ export const ServerSettingsPatch = Schema.Struct({
     Schema.Struct({
       codex: Schema.optionalKey(CodexSettingsPatch),
       claudeAgent: Schema.optionalKey(ClaudeSettingsPatch),
+    }),
+  ),
+  linear: Schema.optionalKey(
+    Schema.Struct({
+      enabled: Schema.optionalKey(Schema.Boolean),
+      webhookSecret: Schema.optionalKey(Schema.String),
+      apiToken: Schema.optionalKey(Schema.String),
+      verificationMode: Schema.optionalKey(LinearSettings.fields.verificationMode),
+      oauth: Schema.optionalKey(
+        Schema.Struct({
+          clientId: Schema.optionalKey(Schema.String),
+          clientSecret: Schema.optionalKey(Schema.String),
+          baseUrl: Schema.optionalKey(Schema.String),
+          scopes: Schema.optionalKey(Schema.Array(Schema.String)),
+          workspace: Schema.optionalKey(
+            Schema.NullOr(
+              Schema.Struct({
+                id: Schema.String,
+                name: Schema.optionalKey(Schema.String),
+                slug: Schema.optionalKey(Schema.String),
+                accessToken: Schema.String,
+                refreshToken: Schema.optionalKey(Schema.String),
+                tokenType: Schema.optionalKey(Schema.String),
+                scope: Schema.optionalKey(Schema.String),
+                expiresAt: Schema.optionalKey(Schema.String),
+                installedAt: Schema.String,
+                updatedAt: Schema.String,
+              }),
+            ),
+          ),
+        }),
+      ),
+    }),
+  ),
+  linearProjectMappings: Schema.optionalKey(
+    Schema.Struct({
+      defaultWorkspaceRoot: Schema.optionalKey(Schema.String),
+      mappings: Schema.optionalKey(
+        Schema.Array(
+          Schema.Struct({
+            organizationId: Schema.optionalKey(Schema.String),
+            teamKey: Schema.optionalKey(Schema.String),
+            labelName: Schema.optionalKey(Schema.String),
+            workspaceRoot: Schema.String,
+            baseBranch: Schema.optionalKey(Schema.String),
+            routeKey: Schema.optionalKey(Schema.String),
+            routeAliases: Schema.optionalKey(Schema.Array(Schema.String)),
+            routingLabels: Schema.optionalKey(Schema.Array(Schema.String)),
+            projectKeys: Schema.optionalKey(Schema.Array(Schema.String)),
+            promptLabels: Schema.optionalKey(
+              Schema.Struct({
+                builder: Schema.optionalKey(Schema.Array(Schema.String)),
+                debugger: Schema.optionalKey(Schema.Array(Schema.String)),
+                scoper: Schema.optionalKey(Schema.Array(Schema.String)),
+                orchestrator: Schema.optionalKey(Schema.Array(Schema.String)),
+                graphite: Schema.optionalKey(Schema.Array(Schema.String)),
+              }),
+            ),
+            toolPolicy: Schema.optionalKey(
+              Schema.Struct({
+                defaultAllowedToolsPreset: Schema.optionalKey(Schema.String),
+                defaultDisallowedTools: Schema.optionalKey(Schema.Array(Schema.String)),
+                promptDefaults: Schema.optionalKey(Schema.Unknown),
+              }),
+            ),
+          }),
+        ),
+      ),
     }),
   ),
 });

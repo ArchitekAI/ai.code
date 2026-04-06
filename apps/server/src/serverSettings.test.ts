@@ -41,6 +41,55 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           },
         },
       );
+
+      assert.deepEqual(
+        decodePatch({
+          linearProjectMappings: {
+            mappings: [
+              {
+                organizationId: "org-1",
+                teamKey: "ENG",
+                workspaceRoot: "/tmp/workspace",
+                routeKey: "web-app",
+                routeAliases: ["web"],
+                routingLabels: ["route:web-app"],
+                projectKeys: ["WEB"],
+                promptLabels: {
+                  orchestrator: ["orchestrator"],
+                  graphite: ["graphite"],
+                },
+                toolPolicy: {
+                  defaultAllowedToolsPreset: "orchestrator",
+                  defaultDisallowedTools: ["Bash(rm:*)"],
+                },
+              },
+            ],
+          },
+        }),
+        {
+          linearProjectMappings: {
+            mappings: [
+              {
+                organizationId: "org-1",
+                teamKey: "ENG",
+                workspaceRoot: "/tmp/workspace",
+                routeKey: "web-app",
+                routeAliases: ["web"],
+                routingLabels: ["route:web-app"],
+                projectKeys: ["WEB"],
+                promptLabels: {
+                  orchestrator: ["orchestrator"],
+                  graphite: ["graphite"],
+                },
+                toolPolicy: {
+                  defaultAllowedToolsPreset: "orchestrator",
+                  defaultDisallowedTools: ["Bash(rm:*)"],
+                },
+              },
+            ],
+          },
+        },
+      );
     }),
   );
 
@@ -238,6 +287,49 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           codex: {
             binaryPath: "/opt/homebrew/bin/codex",
           },
+        },
+      });
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("applies runtime overrides without persisting them to disk", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsService;
+      const serverConfig = yield* ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+
+      yield* serverSettings.updateSettings({
+        observability: {
+          otlpTracesUrl: "http://localhost:4318/v1/traces",
+        },
+      });
+
+      const next = yield* serverSettings.applyRuntimeOverrides({
+        linear: {
+          enabled: true,
+          apiToken: "env-linear-token",
+          webhookSecret: "env-linear-secret",
+          verificationMode: "proxy",
+        },
+      });
+
+      assert.equal(next.linear.enabled, true);
+      assert.equal(next.linear.apiToken, "env-linear-token");
+      assert.equal(next.linear.webhookSecret, "env-linear-secret");
+      assert.equal(next.linear.verificationMode, "proxy");
+
+      const updated = yield* serverSettings.updateSettings({
+        enableAssistantStreaming: true,
+      });
+      assert.equal(updated.enableAssistantStreaming, true);
+      assert.equal(updated.linear.apiToken, "env-linear-token");
+      assert.equal(updated.linear.webhookSecret, "env-linear-secret");
+
+      const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      assert.deepEqual(JSON.parse(raw), {
+        enableAssistantStreaming: true,
+        observability: {
+          otlpTracesUrl: "http://localhost:4318/v1/traces",
         },
       });
     }).pipe(Effect.provide(makeServerSettingsLayer())),

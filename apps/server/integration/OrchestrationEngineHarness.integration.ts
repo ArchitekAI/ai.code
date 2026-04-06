@@ -52,6 +52,9 @@ import { RuntimeReceiptBusLive } from "../src/orchestration/Layers/RuntimeReceip
 import { OrchestrationReactorLive } from "../src/orchestration/Layers/OrchestrationReactor.ts";
 import { ProviderCommandReactorLive } from "../src/orchestration/Layers/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionLive } from "../src/orchestration/Layers/ProviderRuntimeIngestion.ts";
+import { LinearActivitySink } from "../src/linear/Services/LinearActivitySink.ts";
+import { LinearSessionCompletionReactor } from "../src/linear/Services/LinearSessionCompletionReactor.ts";
+import { ChildCompletionReactor } from "../src/mcp/Services/ChildCompletionReactor.ts";
 import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
@@ -333,6 +336,24 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(runtimeIngestionLayer),
       Layer.provideMerge(providerCommandReactorLayer),
       Layer.provideMerge(checkpointReactorLayer),
+      Layer.provideMerge(
+        Layer.succeed(LinearActivitySink, {
+          // Integration harnesses do not need outbound Linear side effects.
+          start: () => Effect.void,
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.succeed(ChildCompletionReactor, {
+          // Harness flows do not delegate child sessions, so keep the reactor inert.
+          start: () => Effect.void,
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.succeed(LinearSessionCompletionReactor, {
+          // Harness flows do not auto-ship or post Linear completion responses.
+          start: () => Effect.void,
+        }),
+      ),
     );
     const layer = Layer.empty.pipe(
       Layer.provideMerge(runtimeServicesLayer),

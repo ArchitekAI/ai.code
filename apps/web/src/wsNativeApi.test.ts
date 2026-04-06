@@ -46,6 +46,7 @@ const rpcClientMock = {
     ),
   },
   projects: {
+    add: vi.fn(),
     searchEntries: vi.fn(),
     writeFile: vi.fn(),
   },
@@ -182,6 +183,29 @@ afterEach(() => {
 });
 
 describe("wsNativeApi", () => {
+  it("forwards project onboarding calls directly to the RPC client", async () => {
+    const projectAddResult = {
+      projectId: ProjectId.makeUnsafe("project-added"),
+      title: "ai.code",
+      workspaceRoot: "/tmp/repos/ai.code",
+      baseBranch: "main",
+      cloned: true,
+      mappingAdded: true,
+      projectCreated: true,
+    };
+    rpcClientMock.projects.add.mockResolvedValue(projectAddResult);
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+
+    await expect(
+      api.projects.add({ repositoryUrl: "https://github.com/ArchitekAI/ai.code.git" }),
+    ).resolves.toEqual(projectAddResult);
+    expect(rpcClientMock.projects.add).toHaveBeenCalledWith({
+      repositoryUrl: "https://github.com/ArchitekAI/ai.code.git",
+    });
+  });
+
   it("forwards server config fetches directly to the RPC client", async () => {
     rpcClientMock.server.getConfig.mockResolvedValue(baseServerConfig);
     const { createWsNativeApi } = await import("./wsNativeApi");

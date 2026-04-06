@@ -8,6 +8,8 @@ import {
   projectFaviconRouteLayer,
   staticAndDevRouteLayer,
 } from "./http";
+import { linearWebhookRouteLayer } from "./linear/Layers/LinearWebhookRoute";
+import { linearOAuthRouteLayer } from "./linear/Layers/LinearOAuthRoute";
 import { fixPath } from "./os-jank";
 import { websocketRpcRouteLayer } from "./ws";
 import { OpenLive } from "./open";
@@ -40,14 +42,29 @@ import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus"
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion";
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor";
+import { BootstrapTurnServiceLive } from "./orchestration/Layers/BootstrapTurnService";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry";
 import { ServerSettingsLive } from "./serverSettings";
 import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver";
+import { ProjectOnboardingLive } from "./project/Layers/ProjectOnboarding";
 import { WorkspaceEntriesLive } from "./workspace/Layers/WorkspaceEntries";
 import { WorkspaceFileSystemLive } from "./workspace/Layers/WorkspaceFileSystem";
 import { WorkspacePathsLive } from "./workspace/Layers/WorkspacePaths";
 import { ProjectSetupScriptRunnerLive } from "./project/Layers/ProjectSetupScriptRunner";
+import { LinearActivitySinkLive } from "./linear/Layers/LinearActivitySink";
+import { LinearClientLive } from "./linear/Layers/LinearClient";
+import { LinearOAuthLive } from "./linear/Layers/LinearOAuth";
+import { LinearPromptAssemblerLive } from "./linear/Layers/LinearPromptAssembler";
+import { LinearSessionCompletionReactorLive } from "./linear/Layers/LinearSessionCompletionReactor";
+import { LinearSessionRegistryLive } from "./linear/Layers/LinearSessionRegistry";
+import { LinearWebhookHandlerLive } from "./linear/Layers/LinearWebhookHandler";
 import { ObservabilityLive } from "./observability/Layers/Observability";
+import { McpContextRegistryLive } from "./mcp/Layers/McpContextRegistry";
+import { ThreadRelationshipRegistryLive } from "./mcp/Layers/ThreadRelationshipRegistry";
+import { ChildCompletionReactorLive } from "./mcp/Layers/ChildCompletionReactor";
+import { mcpToolsRouteLayer } from "./mcp/Layers/McpToolsRoute";
+import { mcpDocsRouteLayer } from "./mcp/Layers/McpDocsRoute";
+import { ToolPolicyResolverLive } from "./provider/Layers/ToolPolicyResolver";
 
 const PtyAdapterLive = Layer.unwrap(
   Effect.gen(function* () {
@@ -102,6 +119,9 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(ProviderRuntimeIngestionLive),
   Layer.provideMerge(ProviderCommandReactorLive),
   Layer.provideMerge(CheckpointReactorLive),
+  Layer.provideMerge(LinearActivitySinkLive),
+  Layer.provideMerge(LinearSessionCompletionReactorLive),
+  Layer.provideMerge(ChildCompletionReactorLive),
   Layer.provideMerge(RuntimeReceiptBusLive),
 );
 
@@ -161,19 +181,55 @@ const ProviderLayerLive = Layer.unwrap(
 
 const PersistenceLayerLive = Layer.empty.pipe(Layer.provideMerge(SqlitePersistenceLayerLive));
 
-const GitLayerLive = Layer.empty.pipe(
-  Layer.provideMerge(
-    GitManagerLive.pipe(
-      Layer.provideMerge(ProjectSetupScriptRunnerLive),
-      Layer.provideMerge(GitCoreLive),
-      Layer.provideMerge(GitHubCliLive),
-      Layer.provideMerge(RoutingTextGenerationLive),
-    ),
-  ),
-  Layer.provideMerge(GitCoreLive),
+const OrchestrationRuntimeLive = OrchestrationLayerLive.pipe(
+  // Projection repositories and event storage are all SQLite-backed.
+  Layer.provide(PersistenceLayerLive),
+);
+
+const CheckpointingRuntimeLive = CheckpointingLayerLive.pipe(
+  // Checkpoint queries and stores persist through SQLite as well.
+  Layer.provide(PersistenceLayerLive),
+);
+
+const LinearSessionRegistryRuntimeLive = LinearSessionRegistryLive.pipe(
+  // Linear session mappings live in the same SQLite database as the rest of the server state.
+  Layer.provide(PersistenceLayerLive),
+);
+
+const ThreadRelationshipRegistryRuntimeLive = ThreadRelationshipRegistryLive.pipe(
+  // Parent-child relationships are persisted so webhook delivery can reconnect sessions.
+  Layer.provide(PersistenceLayerLive),
 );
 
 const TerminalLayerLive = TerminalManagerLive.pipe(Layer.provide(PtyAdapterLive));
+
+const ProjectSetupScriptRuntimeLive = ProjectSetupScriptRunnerLive.pipe(
+  // The setup runner needs both thread/project state and a live terminal to launch scripts.
+  Layer.provide(TerminalLayerLive),
+  Layer.provide(OrchestrationRuntimeLive),
+);
+
+const GitManagerRuntimeLive = GitManagerLive.pipe(
+  // Build GitManager against the fully provisioned git/setup services instead of leaking them.
+  Layer.provide(ProjectSetupScriptRuntimeLive),
+  Layer.provide(GitCoreLive),
+  Layer.provide(GitHubCliLive),
+  Layer.provide(RoutingTextGenerationLive),
+  Layer.provide(ServerSettingsLive),
+);
+
+const GitLayerLive = Layer.mergeAll(
+  GitCoreLive,
+  GitHubCliLive,
+  RoutingTextGenerationLive,
+  ProjectSetupScriptRuntimeLive,
+  GitManagerRuntimeLive,
+);
+
+const BootstrapTurnRuntimeLive = BootstrapTurnServiceLive.pipe(
+  // Bootstrap dispatch depends on git worktrees, setup scripts, and orchestration dispatch.
+  Layer.provide(Layer.mergeAll(GitLayerLive, OrchestrationRuntimeLive)),
+);
 
 const WorkspaceLayerLive = Layer.mergeAll(
   WorkspacePathsLive,
@@ -184,36 +240,82 @@ const WorkspaceLayerLive = Layer.mergeAll(
   ),
 );
 
-const RuntimeDependenciesLive = ReactorLayerLive.pipe(
-  // Core Services
-  Layer.provideMerge(CheckpointingLayerLive),
-  Layer.provideMerge(GitLayerLive),
-  Layer.provideMerge(OrchestrationLayerLive),
-  Layer.provideMerge(ProviderLayerLive),
-  Layer.provideMerge(TerminalLayerLive),
+const LinearOAuthRuntimeLive = LinearOAuthLive.pipe(
+  // Cyrus-style OAuth credentials are stored in server settings, so the OAuth layer
+  // should never leak that dependency to the app runtime.
+  Layer.provide(ServerSettingsLive),
+);
+
+const LinearClientRuntimeLive = LinearClientLive.pipe(
+  // The Linear client can authenticate with either a direct token or the installed
+  // OAuth workspace token, so we satisfy both dependencies here.
+  Layer.provide(Layer.mergeAll(ServerSettingsLive, LinearOAuthRuntimeLive)),
+);
+
+const CoreRuntimeDependenciesLive = Layer.empty.pipe(
+  // Keep core runtime dependencies ordered so layers never race one another in parallel startup.
   Layer.provideMerge(PersistenceLayerLive),
+  Layer.provideMerge(CheckpointingRuntimeLive),
+  Layer.provideMerge(OrchestrationRuntimeLive),
+  Layer.provideMerge(TerminalLayerLive),
+  Layer.provideMerge(ServerSettingsLive),
+  Layer.provideMerge(GitLayerLive),
   Layer.provideMerge(KeybindingsLive),
-  Layer.provideMerge(ProviderRegistryLive),
+  Layer.provideMerge(BootstrapTurnRuntimeLive),
+  Layer.provideMerge(LinearOAuthRuntimeLive),
+  Layer.provideMerge(LinearClientRuntimeLive),
+  Layer.provideMerge(LinearPromptAssemblerLive),
+  Layer.provideMerge(ProviderLayerLive),
+);
+
+const AuxiliaryRuntimeDependenciesLive = Layer.empty.pipe(
+  // Auxiliary services power repo onboarding, favicon resolution, and cross-session lookups.
   Layer.provideMerge(ServerSettingsLive),
   Layer.provideMerge(WorkspaceLayerLive),
+  Layer.provideMerge(LinearSessionRegistryRuntimeLive),
+  Layer.provideMerge(McpContextRegistryLive),
+  Layer.provideMerge(ThreadRelationshipRegistryRuntimeLive),
+  Layer.provideMerge(ToolPolicyResolverLive),
+  Layer.provideMerge(ProviderRegistryLive),
   Layer.provideMerge(ProjectFaviconResolverLive),
-
-  // Misc.
   Layer.provideMerge(AnalyticsServiceLayerLive),
   Layer.provideMerge(OpenLive),
   Layer.provideMerge(ServerLifecycleEventsLive),
 );
 
-const RuntimeServicesLive = ServerRuntimeStartupLive.pipe(
+const RuntimeDependenciesLive = ReactorLayerLive.pipe(
+  // Core services must exist before startup can wire routes and reactors together.
+  Layer.provideMerge(CoreRuntimeDependenciesLive),
+  Layer.provideMerge(AuxiliaryRuntimeDependenciesLive),
+);
+
+const RuntimeServicesBaseLive = ServerRuntimeStartupLive.pipe(
   Layer.provideMerge(RuntimeDependenciesLive),
+);
+
+const ProjectOnboardingRuntimeLive = ProjectOnboardingLive.pipe(
+  // Repo onboarding clones into managed storage and immediately creates a T3 project.
+  Layer.provide(RuntimeServicesBaseLive),
+);
+
+const RuntimeServicesLive = Layer.mergeAll(RuntimeServicesBaseLive, ProjectOnboardingRuntimeLive);
+
+const AppRuntimeLive = Layer.mergeAll(
+  RuntimeServicesLive,
+  // Build the webhook handler only after the startup/runtime services exist to avoid leaking deps.
+  LinearWebhookHandlerLive.pipe(Layer.provide(RuntimeServicesLive)),
 );
 
 export const makeRoutesLayer = Layer.mergeAll(
   attachmentsRouteLayer,
+  linearOAuthRouteLayer,
+  linearWebhookRouteLayer,
+  mcpDocsRouteLayer,
+  mcpToolsRouteLayer,
   otlpTracesProxyRouteLayer,
   projectFaviconRouteLayer,
-  staticAndDevRouteLayer,
   websocketRpcRouteLayer,
+  staticAndDevRouteLayer,
 );
 
 export const makeServerLayer = Layer.unwrap(
@@ -238,11 +340,14 @@ export const makeServerLayer = Layer.unwrap(
     );
 
     return serverApplicationLayer.pipe(
-      Layer.provideMerge(RuntimeServicesLive),
-      Layer.provideMerge(HttpServerLive),
+      Layer.provide(AppRuntimeLive),
+      // Close the last runtime gaps explicitly so CLI entrypoints only need ServerConfig.
+      Layer.provide(ServerSettingsLive),
+      Layer.provide(PersistenceLayerLive),
+      Layer.provide(HttpServerLive),
       Layer.provide(ObservabilityLive),
-      Layer.provideMerge(FetchHttpClient.layer),
-      Layer.provideMerge(PlatformServicesLive),
+      Layer.provide(FetchHttpClient.layer),
+      Layer.provide(PlatformServicesLive),
     );
   }),
 );
