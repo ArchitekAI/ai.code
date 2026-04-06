@@ -131,7 +131,9 @@ const LinearAgentActivityContentWebhook = Schema.Struct({
 });
 
 const LinearAgentActivityWebhook = Schema.Struct({
-  id: TrimmedNonEmptyString,
+  // Prompted payloads can omit the activity id even when the body/signal is present.
+  // Treat the id as optional metadata so select/stop prompts still decode cleanly.
+  id: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
   signal: Schema.optional(TrimmedNonEmptyString),
   content: Schema.optional(LinearAgentActivityContentWebhook),
 });

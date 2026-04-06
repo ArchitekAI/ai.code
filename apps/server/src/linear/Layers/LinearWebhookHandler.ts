@@ -53,6 +53,10 @@ import {
   LinearWebhookHandler,
   type LinearWebhookHandlerShape,
 } from "../Services/LinearWebhookHandler.ts";
+import {
+  dedupeLinearSessions,
+  findLatestLiveLinearSessionContext,
+} from "./LinearSessionContext.ts";
 
 const LINEAR_AGENT_SESSION_MARKER = "This thread is for an agent session";
 const LINEAR_STOP_REQUEST = /^\s*stop(\s+session|\s+working)?[\s.!?]*$/i;
@@ -235,7 +239,9 @@ function parseRepoDirective(description: string | undefined): RepoDirective | nu
     return null;
   }
 
-  const match = /\[repo=([^\]#\s]+)(?:#([^\]]+))?\]/i.exec(description);
+  // Linear API writes escaped markdown brackets for some issue creation paths,
+  // so we accept both `[repo=foo]` and `\[repo=foo\]` here.
+  const match = /\\?\[repo=([^\]\\#\s]+)(?:#([^\]\\]+))?\\?\]/i.exec(description);
   if (!match) {
     return null;
   }
@@ -663,10 +669,6 @@ const continuationCommentFromPromptedWebhook = (
 const stopTextFromPromptedWebhook = (webhook: LinearAgentSessionPromptedWebhookPayload) =>
   webhook.agentActivity?.content?.body?.trim() ?? webhook.agentSession.comment?.body?.trim() ?? "";
 
-const dedupeSessions = (sessions: ReadonlyArray<LinearSessionRow>) => [
-  ...new Map(sessions.map((session) => [session.linearSessionId, session])).values(),
-];
-
 const isTerminalWorkflowState = (input: { readonly name: string; readonly type?: string }) => {
   const normalizedType = input.type?.trim().toLowerCase();
   if (normalizedType === "completed" || normalizedType === "canceled") {
@@ -1056,41 +1058,16 @@ const makeLinearWebhookHandler = Effect.gen(function* () {
     },
   );
 
-  const findLatestLiveSessionContext: (
-    sessions: ReadonlyArray<LinearSessionRow>,
-  ) => Effect.Effect<
-    { readonly session: LinearSessionRow; readonly thread: ActiveThreadContext } | null,
-    ProjectionRepositoryError | LinearSessionRegistryError,
-    never
-  > = Effect.fn("findLatestLiveSessionContext")(function* (
-    sessions: ReadonlyArray<LinearSessionRow>,
-  ) {
-    const sortedSessions = sessions.toSorted((left, right) =>
-      right.createdAt.localeCompare(left.createdAt),
-    );
-
-    for (const session of sortedSessions) {
-      const thread = yield* lookupThreadContext(session.threadId);
-      if (Option.isSome(thread)) {
-        return {
-          session,
-          thread: thread.value,
-        };
-      }
-
-      // Prune dead mappings eagerly so the next webhook can recover automatically.
-      yield* sessionRegistry.remove(session.linearSessionId);
-    }
-
-    return null;
-  });
-
   const findBlockedByBranch = Effect.fn("findBlockedByBranch")(function* (
     issue: LinearIssueDetails,
   ) {
     for (const blockedByIssueId of issue.blockedByIssueIds) {
       const sessions = yield* sessionRegistry.listByIssueId(blockedByIssueId);
-      const blockedBySession = yield* findLatestLiveSessionContext(sessions);
+      const blockedBySession = yield* findLatestLiveLinearSessionContext({
+        sessions,
+        lookupThreadContext,
+        removeSession: sessionRegistry.remove,
+      });
       const branch = blockedBySession?.thread.branch?.trim();
       if (branch) {
         return branch;
@@ -1122,7 +1099,11 @@ const makeLinearWebhookHandler = Effect.gen(function* () {
     const issueComments = yield* linearClient.fetchIssueComments(fetchedIssue.id);
     const newComment = newCommentFromCreatedWebhook(webhook);
     const issueSessions = yield* sessionRegistry.listByIssueId(fetchedIssue.id);
-    const existingSessionContext = yield* findLatestLiveSessionContext(issueSessions);
+    const existingSessionContext = yield* findLatestLiveLinearSessionContext({
+      sessions: issueSessions,
+      lookupThreadContext,
+      removeSession: sessionRegistry.remove,
+    });
     const parentRelationship = yield* threadRelationshipRegistry.findParentByLinearSession(
       webhook.agentSession.id,
     );
@@ -1317,13 +1298,17 @@ const makeLinearWebhookHandler = Effect.gen(function* () {
 
     const sessionLookup = yield* sessionRegistry.lookupBySessionId(webhook.agentSession.id);
     const fallbackSessions = yield* sessionRegistry.listByIssueId(issueId);
-    const sessionCandidates = dedupeSessions(
+    const sessionCandidates = dedupeLinearSessions(
       Option.match(sessionLookup, {
         onNone: () => fallbackSessions,
         onSome: (session) => [session, ...fallbackSessions],
       }),
     );
-    const targetSession = yield* findLatestLiveSessionContext(sessionCandidates);
+    const targetSession = yield* findLatestLiveLinearSessionContext({
+      sessions: sessionCandidates,
+      lookupThreadContext,
+      removeSession: sessionRegistry.remove,
+    });
 
     if (!targetSession) {
       return yield* new LinearWebhookHandlerError({
@@ -1421,7 +1406,11 @@ const makeLinearWebhookHandler = Effect.gen(function* () {
     }
 
     const sessions = yield* sessionRegistry.listByIssueId(webhook.data.id);
-    const targetSession = yield* findLatestLiveSessionContext(sessions);
+    const targetSession = yield* findLatestLiveLinearSessionContext({
+      sessions,
+      lookupThreadContext,
+      removeSession: sessionRegistry.remove,
+    });
     if (!targetSession) {
       return;
     }

@@ -251,26 +251,66 @@ function readLifecycleDetail(activity: OrchestrationThreadActivity): string | nu
   return payload ? asString(payload.detail) : null;
 }
 
+function looksLikeCommandExecutionActivity(input: {
+  readonly activity: OrchestrationThreadActivity;
+  readonly itemType: string | null;
+  readonly item: Record<string, unknown> | null;
+  readonly detail: string | null;
+}): boolean {
+  if (input.itemType === "command_execution") {
+    return true;
+  }
+
+  const summary = input.activity.summary.trim().toLowerCase();
+  if (
+    summary.includes("ran command") ||
+    summary === "bash" ||
+    (summary.startsWith("running ") && (summary.includes("command") || summary.includes("bash")))
+  ) {
+    return true;
+  }
+
+  const command =
+    (input.item && (asString(input.item.command) ?? asString(input.item.rawCommand))) ?? null;
+  if (command?.trim()) {
+    return true;
+  }
+
+  return input.detail?.startsWith("/bin/") ?? false;
+}
+
 function formatCompletedToolActivity(
   activity: OrchestrationThreadActivity,
 ): FormattedLinearActivity | null {
   const itemType = readLifecycleItemType(activity);
   const item = readLifecycleItem(activity);
   const detail = readLifecycleDetail(activity);
+  const isCommandExecution = looksLikeCommandExecutionActivity({
+    activity,
+    itemType,
+    item,
+    detail,
+  });
 
   switch (itemType) {
-    case "command_execution": {
+    case "command_execution":
+    case null:
+    case undefined:
+      if (!isCommandExecution) {
+        break;
+      }
       const command = (item && asString(item.command)) ?? detail;
       return {
         content: {
           type: "action",
-          action: "Bash",
+          // Cyrus shows command work as durable "Ran command" entries instead of noisy
+          // start/update chatter. Matching that phrasing keeps the Linear timeline readable.
+          action: "Ran command",
           ...(command ? { parameter: command } : {}),
           result: formatCommandResult(item ?? {}),
         },
         ephemeral: false,
       };
-    }
     case "mcp_tool_call":
     case "dynamic_tool_call":
     case "collab_agent_tool_call":
@@ -300,22 +340,36 @@ function formatCompletedToolActivity(
     default:
       return null;
   }
+
+  return null;
 }
 
 function shouldSuppressToolProgress(activity: OrchestrationThreadActivity): boolean {
   const itemType = readLifecycleItemType(activity);
-  if (!itemType) {
-    return false;
+  const item = readLifecycleItem(activity);
+  const detail = readLifecycleDetail(activity);
+  if (
+    looksLikeCommandExecutionActivity({
+      activity,
+      itemType,
+      item,
+      detail,
+    })
+  ) {
+    return true;
   }
-  return [
-    "command_execution",
-    "file_change",
-    "mcp_tool_call",
-    "dynamic_tool_call",
-    "collab_agent_tool_call",
-    "web_search",
-    "image_view",
-  ].includes(itemType);
+
+  return itemType
+    ? [
+        "command_execution",
+        "file_change",
+        "mcp_tool_call",
+        "dynamic_tool_call",
+        "collab_agent_tool_call",
+        "web_search",
+        "image_view",
+      ].includes(itemType)
+    : false;
 }
 
 export function formatLinearActivityContent(
@@ -339,23 +393,12 @@ export function formatLinearActivityContent(
       };
     case "tool.completed":
       return formatCompletedToolActivity(activity);
-    case "task.started":
-      return {
-        content: {
-          type: "thought",
-          body: activity.summary,
-        },
-        ephemeral: false,
-      };
     case "task.progress":
+    case "task.started":
     case "task.completed":
-      return {
-        content: {
-          type: "thought",
-          body: detail ? `${activity.summary}: ${detail}` : activity.summary,
-        },
-        ephemeral: false,
-      };
+      // Cyrus keeps the public Linear timeline focused on concrete actions and
+      // results instead of streaming every internal task transition.
+      return null;
     case "approval.requested":
       return {
         content: {

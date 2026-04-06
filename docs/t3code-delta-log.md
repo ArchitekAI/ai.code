@@ -311,3 +311,38 @@ For each entry, capture:
   - `apps/web/src/session-logic.ts`
   - `apps/web/src/session-logic.test.ts`
 - Notes: This only changes presentation. The underlying activities are still persisted for debugging and server-side orchestration.
+
+### Keep runtime MCP auth files out of shipped commits
+
+- Status: Local-only
+- Merge risk: Medium
+- User context: Vevin was creating valid commits locally, but GitHub push protection blocked branch pushes because runtime-generated `.mcp.json` files with Linear OAuth tokens were getting staged and committed.
+- Why: Self-hosted Linear sessions need runtime MCP auth material inside the worktree so Codex can talk back to Linear, but those files must never become part of the repo diff or PR branch.
+- Behavior: Commit preparation now always filters `.mcp.json` and `.codex/mcp.json` out of staged changes, even when staging specific paths. Linear bootstrap also writes those runtime files into `.git/info/exclude` so normal git status/add flows keep treating them as ignored noise.
+- Files:
+  - `apps/server/src/git/Layers/GitCore.ts`
+  - `apps/server/src/git/Layers/GitCore.test.ts`
+  - `apps/server/src/orchestration/Layers/BootstrapTurnService.ts`
+- Notes: This adapts Cyrus's "runtime auth is operational state, not repo state" behavior to T3 Code's worktree bootstrap path.
+
+### Let Linear completion settle even if the provider session is still marked running
+
+- Status: Local-only
+- Merge risk: Medium
+- User context: Vevin could finish the turn and generate the final assistant message, but Linear sometimes stayed stuck on `Working` with no terminal response, commit, push, or PR because the provider session status lagged behind.
+- Why: T3 Code's Linear completion reactor previously waited for a completed turn _and_ a terminal session status (`ready` or `stopped`). Under real provider timing, the completed turn can arrive before the session transitions out of `running`.
+- Behavior: Once the latest turn is completed, the Linear completion reactor now treats `running`, `ready`, and `stopped` session states as eligible for the terminal shipping pass. The resulting response/commit/PR flow now runs from the completed turn instead of silently stalling on status lag.
+- Files:
+  - `apps/server/src/linear/Layers/LinearSessionCompletionReactor.ts`
+- Notes: This is intentionally more tolerant than upstream T3 Code because Cyrus treats the completed turn as the source of truth for terminal issue activity.
+
+### Tolerate missing Linear prompted-webhook activity IDs
+
+- Status: Local-only
+- Merge risk: Low
+- User context: Prompted Linear webhooks could fail schema validation in production because some payloads omitted the activity ID field, which prevented follow-up actions from being processed.
+- Why: Real Linear prompted payloads are looser than our original contract schema.
+- Behavior: The prompted webhook schema now accepts a missing `id` field and defaults it to an empty string so routing logic can continue handling the response.
+- Files:
+  - `packages/contracts/src/linear.ts`
+- Notes: This keeps the webhook contract aligned with observed Linear payloads and the Cyrus-style "best effort prompt recovery" behavior.

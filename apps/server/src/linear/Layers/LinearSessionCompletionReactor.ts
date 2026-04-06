@@ -7,17 +7,19 @@ import {
   type OrchestrationThread,
   type ThreadId,
 } from "@t3tools/contracts";
-import { Effect, Exit, Layer, Ref, Stream } from "effect";
+import { Duration, Effect, Exit, Layer, Option, Ref, Stream } from "effect";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { GitManager, type GitActionProgressReporter } from "../../git/Services/GitManager.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
+import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { LinearClient } from "../Services/LinearClient.ts";
 import { LinearSessionRegistry } from "../Services/LinearSessionRegistry.ts";
 import {
   LinearSessionCompletionReactor,
   type LinearSessionCompletionReactorShape,
 } from "../Services/LinearSessionCompletionReactor.ts";
+import { findLatestLiveLinearSessionContext } from "./LinearSessionContext.ts";
 
 type CompletionCandidateEvent = Extract<
   OrchestrationEvent,
@@ -25,8 +27,8 @@ type CompletionCandidateEvent = Extract<
 >;
 type LinearShippingAction = "commit_push_pr" | "create_pr";
 
-const latestByCreatedAt = <T extends { readonly createdAt: string }>(entries: ReadonlyArray<T>) =>
-  entries.toSorted((left, right) => right.createdAt.localeCompare(left.createdAt))[0] ?? null;
+const COMPLETION_SETTLE_ATTEMPTS = 8;
+const COMPLETION_SETTLE_DELAY = Duration.millis(250);
 
 export function resolveLinearShippingAction(
   status: Pick<GitStatusResult, "isRepo" | "hasWorkingTreeChanges" | "aheadCount" | "pr">,
@@ -47,6 +49,13 @@ export function isLinearCompletionCandidateStatus(
   status: OrchestrationSessionStatus,
 ): status is "ready" | "stopped" {
   return status === "ready" || status === "stopped";
+}
+
+function canSettleLinearCompletion(status: OrchestrationSessionStatus): boolean {
+  // Provider teardown can lag behind the final assistant turn. Let completed turns
+  // ship while the session is still marked running so Linear doesn't get stuck in
+  // an endless "Working" state after the useful work is already done.
+  return status === "running" || status === "ready" || status === "stopped";
 }
 
 export function isLinearCompletionTriggerEvent(
@@ -140,7 +149,7 @@ export function buildLinearCompletionResponse(input: {
   return `${summary}\n\n${prSummary}`;
 }
 
-function gitProgressToLinearContent(event: GitActionProgressEvent) {
+function gitProgressToLinearActivity(event: GitActionProgressEvent) {
   switch (event.kind) {
     case "action_started":
       return {
@@ -149,11 +158,13 @@ function gitProgressToLinearContent(event: GitActionProgressEvent) {
           event.action === "commit_push_pr"
             ? "Shipping code changes..."
             : "Preparing pull request...",
+        ephemeral: true,
       } as const;
     case "phase_started":
       return {
         type: "thought",
         body: event.label,
+        ephemeral: true,
       } as const;
     case "action_finished": {
       const prUrl = event.result.pr.url ?? null;
@@ -162,16 +173,19 @@ function gitProgressToLinearContent(event: GitActionProgressEvent) {
             type: "action",
             action: "Pull request ready",
             parameter: prUrl,
+            ephemeral: false,
           } as const)
         : ({
             type: "thought",
             body: "Git shipping steps completed.",
+            ephemeral: false,
           } as const);
     }
     case "action_failed":
       return {
         type: "error",
         body: event.message,
+        ephemeral: false,
       } as const;
     case "hook_started":
     case "hook_output":
@@ -183,21 +197,32 @@ function gitProgressToLinearContent(event: GitActionProgressEvent) {
 const make = Effect.gen(function* () {
   const gitManager = yield* GitManager;
   const orchestrationEngine = yield* OrchestrationEngineService;
+  const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const linearClient = yield* LinearClient;
   const sessionRegistry = yield* LinearSessionRegistry;
   const processedTurns = yield* Ref.make(new Map<ThreadId, string>());
 
-  const postDurableActivity = Effect.fn("postLinearCompletionActivity")(function* (input: {
+  const lookupThreadContext = Effect.fn("lookupLinearCompletionThreadContext")(function* (
+    threadId: ThreadId,
+  ) {
+    const snapshot = yield* projectionSnapshotQuery.getSnapshot();
+    const thread =
+      snapshot.threads.find(
+        (entry) => entry.id === threadId && entry.archivedAt === null && entry.deletedAt === null,
+      ) ?? null;
+    return thread === null ? Option.none<(typeof snapshot.threads)[number]>() : Option.some(thread);
+  });
+
+  const postActivity = Effect.fn("postLinearCompletionActivity")(function* (input: {
     readonly linearSessionId: string;
     readonly content: Record<string, unknown>;
+    readonly ephemeral: boolean;
   }) {
-    // These activities are the durable audit trail that mirrors Cyrus's
-    // session-manager behavior instead of relying on ephemeral status banners.
     yield* linearClient
       .createAgentActivity({
         agentSessionId: input.linearSessionId,
         content: input.content,
-        ephemeral: false,
+        ephemeral: input.ephemeral,
       })
       .pipe(
         Effect.catch((error) =>
@@ -213,12 +238,14 @@ const make = Effect.gen(function* () {
     readonly linearSessionId: string;
     readonly body: string;
   }) {
-    yield* postDurableActivity({
+    // Cyrus treats the final response as a durable terminal event for the session.
+    yield* postActivity({
       linearSessionId: input.linearSessionId,
       content: {
         type: "response",
         body: input.body,
       },
+      ephemeral: false,
     });
   });
 
@@ -242,28 +269,53 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const loadSettledCompletionContext = Effect.fn("loadSettledLinearCompletionContext")(
+    function* (input: { readonly threadId: ThreadId; readonly eventTurnId: string | null }) {
+      for (let attempt = 0; attempt < COMPLETION_SETTLE_ATTEMPTS; attempt += 1) {
+        const snapshot = yield* projectionSnapshotQuery.getSnapshot();
+        const thread =
+          snapshot.threads.find(
+            (entry) =>
+              entry.id === input.threadId && entry.archivedAt === null && entry.deletedAt === null,
+          ) ?? null;
+        if (
+          thread &&
+          thread.latestTurn &&
+          thread.latestTurn.state === "completed" &&
+          thread.session &&
+          canSettleLinearCompletion(thread.session.status) &&
+          (input.eventTurnId === null || input.eventTurnId === thread.latestTurn.turnId)
+        ) {
+          return {
+            snapshot,
+            thread,
+          };
+        }
+        if (attempt < COMPLETION_SETTLE_ATTEMPTS - 1) {
+          yield* Effect.sleep(COMPLETION_SETTLE_DELAY);
+        }
+      }
+      return null;
+    },
+  );
+
   const processCompletionCandidateThread = Effect.fn("processLinearCompletionCandidateThread")(
     function* (event: CompletionCandidateEvent) {
       const threadId = completionCandidateThreadId(event);
-      const readModel = yield* orchestrationEngine.getReadModel();
-      const thread = readModel.threads.find((entry) => entry.id === threadId) ?? null;
-      if (!thread || !thread.latestTurn || thread.latestTurn.state !== "completed") {
+      const settledContext = yield* loadSettledCompletionContext({
+        threadId,
+        eventTurnId: completionCandidateTurnId(event),
+      });
+      if (!settledContext) {
+        return;
+      }
+      const { snapshot, thread } = settledContext;
+      const latestTurn = thread.latestTurn;
+      if (!latestTurn) {
         return;
       }
 
-      // Completion can race with projection updates, so we only process once the
-      // read model shows the terminal session state and the latest turn matches
-      // the event that nudged us to re-check.
-      if (!thread.session || !isLinearCompletionCandidateStatus(thread.session.status)) {
-        return;
-      }
-
-      const eventTurnId = completionCandidateTurnId(event);
-      if (eventTurnId !== null && eventTurnId !== thread.latestTurn.turnId) {
-        return;
-      }
-
-      const turnId = thread.latestTurn.turnId;
+      const turnId = latestTurn.turnId;
       const alreadyProcessed = yield* hasProcessedTurn({
         threadId: thread.id,
         turnId,
@@ -273,12 +325,16 @@ const make = Effect.gen(function* () {
       }
 
       const threadSessions = yield* sessionRegistry.listByThreadId(thread.id);
-      const latestLinearSession = latestByCreatedAt(threadSessions);
+      const latestLinearSession = yield* findLatestLiveLinearSessionContext({
+        sessions: threadSessions,
+        lookupThreadContext,
+        removeSession: sessionRegistry.remove,
+      });
       if (!latestLinearSession) {
         return;
       }
 
-      const project = readModel.projects.find((entry) => entry.id === thread.projectId) ?? null;
+      const project = snapshot.projects.find((entry) => entry.id === thread.projectId) ?? null;
       const cwd = thread.worktreePath ?? project?.workspaceRoot ?? null;
       if (!cwd) {
         return;
@@ -288,15 +344,16 @@ const make = Effect.gen(function* () {
       const assistantSummary = findAssistantSummary(thread);
       if (Exit.isFailure(statusResult)) {
         const detail = `Failed to inspect git status: ${statusResult.cause.toString()}`;
-        yield* postDurableActivity({
-          linearSessionId: latestLinearSession.linearSessionId,
+        yield* postActivity({
+          linearSessionId: latestLinearSession.session.linearSessionId,
           content: {
             type: "error",
             body: detail,
           },
+          ephemeral: false,
         });
         yield* postResponse({
-          linearSessionId: latestLinearSession.linearSessionId,
+          linearSessionId: latestLinearSession.session.linearSessionId,
           body: assistantSummary ? `${assistantSummary}\n\n${detail}` : detail,
         });
         yield* markTurnProcessed({
@@ -317,7 +374,7 @@ const make = Effect.gen(function* () {
         });
         if (noOpResponse) {
           yield* postResponse({
-            linearSessionId: latestLinearSession.linearSessionId,
+            linearSessionId: latestLinearSession.session.linearSessionId,
             body: noOpResponse,
           });
         }
@@ -330,13 +387,23 @@ const make = Effect.gen(function* () {
 
       const progressReporter: GitActionProgressReporter = {
         publish: (progressEvent: GitActionProgressEvent) => {
-          const content = gitProgressToLinearContent(progressEvent);
-          if (!content) {
+          const activity = gitProgressToLinearActivity(progressEvent);
+          if (!activity) {
             return Effect.void;
           }
-          return postDurableActivity({
-            linearSessionId: latestLinearSession.linearSessionId,
-            content,
+          return postActivity({
+            linearSessionId: latestLinearSession.session.linearSessionId,
+            content:
+              activity.type === "thought"
+                ? { type: "thought", body: activity.body }
+                : activity.type === "action"
+                  ? {
+                      type: "action",
+                      action: activity.action,
+                      ...(activity.parameter ? { parameter: activity.parameter } : {}),
+                    }
+                  : { type: "error", body: activity.body },
+            ephemeral: activity.ephemeral,
           });
         },
       };
@@ -344,7 +411,7 @@ const make = Effect.gen(function* () {
       const actionEffect = gitManager
         .runStackedAction(
           {
-            actionId: `linear:${latestLinearSession.linearSessionId}:${turnId}`,
+            actionId: `linear:${latestLinearSession.session.linearSessionId}:${turnId}`,
             cwd,
             action: shippingAction,
           },
@@ -354,15 +421,16 @@ const make = Effect.gen(function* () {
           Effect.catch((error) =>
             Effect.gen(function* () {
               const detail = `Automatic shipping failed: ${error.message}`;
-              yield* postDurableActivity({
-                linearSessionId: latestLinearSession.linearSessionId,
+              yield* postActivity({
+                linearSessionId: latestLinearSession.session.linearSessionId,
                 content: {
                   type: "error",
                   body: detail,
                 },
+                ephemeral: false,
               });
               yield* postResponse({
-                linearSessionId: latestLinearSession.linearSessionId,
+                linearSessionId: latestLinearSession.session.linearSessionId,
                 body: assistantSummary ? `${assistantSummary}\n\n${detail}` : detail,
               });
               return null;
@@ -387,11 +455,15 @@ const make = Effect.gen(function* () {
         result: actionResult,
       });
       if (!responseBody) {
+        yield* markTurnProcessed({
+          threadId: thread.id,
+          turnId,
+        });
         return;
       }
 
       yield* postResponse({
-        linearSessionId: latestLinearSession.linearSessionId,
+        linearSessionId: latestLinearSession.session.linearSessionId,
         body: responseBody,
       });
       yield* markTurnProcessed({

@@ -465,11 +465,25 @@ export function deriveWorkLogEntries(
     .filter((activity) => activity.kind !== "task.started" && activity.kind !== "task.completed")
     .filter((activity) => activity.kind !== "context-window.updated")
     .filter((activity) => activity.summary !== "Checkpoint captured")
+    // Keep the durable timeline focused on plans, file changes, and outcomes.
+    // Raw shell churn makes Vevin feel much noisier than Jevin for the same run.
+    .filter((activity) => !isCommandExecutionWorkLogActivity(activity))
     .filter((activity) => !isPlanBoundaryToolActivity(activity))
     .map(toDerivedWorkLogEntry);
   return collapseDerivedWorkLogEntries(entries).map(
     ({ activityKind: _activityKind, collapseKey: _collapseKey, ...entry }) => entry,
   );
+}
+
+function isCommandExecutionWorkLogActivity(activity: OrchestrationThreadActivity): boolean {
+  if (activity.kind !== "tool.updated" && activity.kind !== "tool.completed") {
+    return false;
+  }
+  const payload =
+    activity.payload && typeof activity.payload === "object"
+      ? (activity.payload as Record<string, unknown>)
+      : null;
+  return payload?.itemType === "command_execution";
 }
 
 function isPlanBoundaryToolActivity(activity: OrchestrationThreadActivity): boolean {

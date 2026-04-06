@@ -54,7 +54,7 @@ describe("LinearActivitySink", () => {
         threadId: "thread-1",
         activity: {
           kind: "tool.started",
-          summary: "Ran command",
+          summary: "Running Ran command started...",
           createdAt: "2026-04-06T12:00:00.000Z",
           payload: {
             itemType: "command_execution",
@@ -96,7 +96,7 @@ describe("LinearActivitySink", () => {
       ephemeral: false,
       content: {
         type: "action",
-        action: "Bash",
+        action: "Ran command",
         parameter: "/bin/bash -lc pwd",
         result: "/var/lib/t3code/worktrees/ai.code/feature-aff-1605-test-issue",
       },

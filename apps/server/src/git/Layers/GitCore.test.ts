@@ -2027,6 +2027,50 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("prepareCommitContext keeps runtime MCP files out of auto-staged commits", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        const fileSystem = yield* FileSystem.FileSystem;
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+
+        yield* fileSystem.makeDirectory(path.join(tmp, ".codex"), { recursive: true });
+        yield* writeTextFile(path.join(tmp, ".mcp.json"), '{"token":"secret"}\n');
+        yield* writeTextFile(path.join(tmp, ".codex", "mcp.json"), '{"token":"secret"}\n');
+
+        const context = yield* core.prepareCommitContext(tmp);
+        expect(context).toBeNull();
+
+        const statusAfter = yield* git(tmp, ["status", "--porcelain"]);
+        expect(statusAfter).toContain(".mcp.json");
+        expect(statusAfter).toContain(".codex/");
+      }),
+    );
+
+    it.effect("prepareCommitContext ignores runtime MCP files when staging selected paths", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        const fileSystem = yield* FileSystem.FileSystem;
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+
+        yield* fileSystem.makeDirectory(path.join(tmp, ".codex"), { recursive: true });
+        yield* writeTextFile(path.join(tmp, "a.txt"), "file a\n");
+        yield* writeTextFile(path.join(tmp, ".mcp.json"), '{"token":"secret"}\n');
+        yield* writeTextFile(path.join(tmp, ".codex", "mcp.json"), '{"token":"secret"}\n');
+
+        const context = yield* core.prepareCommitContext(tmp, [
+          "a.txt",
+          ".mcp.json",
+          ".codex/mcp.json",
+        ]);
+        expect(context).not.toBeNull();
+        expect(context!.stagedSummary).toContain("a.txt");
+        expect(context!.stagedSummary).not.toContain(".mcp.json");
+        expect(context!.stagedSummary).not.toContain(".codex/mcp.json");
+      }),
+    );
+
     it.effect("prepareCommitContext truncates oversized staged patches instead of failing", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();

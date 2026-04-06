@@ -664,6 +664,50 @@ it.layer(NodeServices.layer)("linear webhook handler", (it) => {
     }),
   );
 
+  it.effect("resolves escaped repo directives without prompting for repository selection", () =>
+    Effect.gen(function* () {
+      const harness = makeHandlerLayer({
+        readModel: makeReadModel([]),
+        issueDetails: {
+          ...defaultIssueDetails,
+          description:
+            "\\[repo=ai.code\\]\nCreate a small text file and open a pull request when done.",
+        },
+        mappings: [
+          {
+            workspaceRoot: "/tmp/hello-world",
+            routeKey: "hello-world-test",
+            teamKey: "ENG",
+            baseBranch: "master",
+          },
+          {
+            workspaceRoot: "/tmp/ai.code",
+            routeKey: "ai.code",
+            teamKey: "ENG",
+            baseBranch: "main",
+          },
+        ],
+      });
+
+      yield* runWebhook(harness.layer, makeCreatedPayload("linear-session-escaped-directive"));
+
+      assert.equal(harness.createdAgentActivities.length, 0);
+      assert.equal(harness.commands.length, 1);
+
+      const command = harness.commands[0];
+      if (command?.type !== "thread.turn.start" || !command.bootstrap?.prepareWorktree) {
+        throw new Error("Expected thread.turn.start command with prepareWorktree");
+      }
+
+      assert.equal(command.bootstrap.prepareWorktree.projectCwd, "/tmp/ai.code");
+      assert.equal(command.bootstrap.prepareWorktree.baseBranch, "main");
+      assert.equal(
+        harness.registeredSessions[0]?.linearSessionId,
+        "linear-session-escaped-directive",
+      );
+    }),
+  );
+
   it.effect(
     "falls back to the first configured repository when the prompted reply ignores selection",
     () =>

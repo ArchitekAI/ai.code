@@ -22,6 +22,8 @@ import {
 const serverCommandId = (tag: string): CommandId =>
   CommandId.makeUnsafe(`server:${tag}:${crypto.randomUUID()}`);
 
+const RUNTIME_MCP_IGNORE_PATTERNS = [".mcp.json", ".codex/mcp.json"] as const;
+
 const buildLinearMcpConfig = (input: {
   readonly linearApiToken: string;
   readonly port: number;
@@ -112,6 +114,51 @@ const makeBootstrapTurnService = Effect.gen(function* () {
         });
   };
 
+  const ensureRuntimeMcpFilesStayIgnored = Effect.fn("ensureRuntimeMcpFilesStayIgnored")(function* (
+    worktreePath: string,
+  ) {
+    const excludePathResult = yield* git.execute({
+      operation: "resolve git exclude path",
+      cwd: worktreePath,
+      args: ["rev-parse", "--git-path", "info/exclude"],
+      allowNonZeroExit: true,
+    });
+    if (excludePathResult.code !== 0) {
+      return;
+    }
+
+    const excludePath = path.isAbsolute(excludePathResult.stdout.trim())
+      ? excludePathResult.stdout.trim()
+      : path.join(worktreePath, excludePathResult.stdout.trim());
+    if (!excludePath) {
+      return;
+    }
+
+    const existingContents = yield* fileSystem
+      .readFileString(excludePath)
+      .pipe(Effect.catch(() => Effect.succeed("")));
+    const existingEntries = new Set(
+      existingContents
+        .split(/\r?\n/g)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0),
+    );
+
+    let changed = false;
+    for (const pattern of RUNTIME_MCP_IGNORE_PATTERNS) {
+      if (!existingEntries.has(pattern)) {
+        existingEntries.add(pattern);
+        changed = true;
+      }
+    }
+    if (!changed) {
+      return;
+    }
+
+    const nextContents = `${Array.from(existingEntries).join("\n")}\n`;
+    yield* fileSystem.writeFileString(excludePath, nextContents);
+  });
+
   const writeLinearMcpConfigToWorktree = Effect.fn("writeLinearMcpConfigToWorktree")(function* (
     worktreePath: string,
     projectId: ProjectId,
@@ -144,6 +191,7 @@ const makeBootstrapTurnService = Effect.gen(function* () {
     yield* fileSystem.makeDirectory(codexConfigDir, { recursive: true });
     yield* fileSystem.writeFileString(path.join(worktreePath, ".mcp.json"), configContents);
     yield* fileSystem.writeFileString(path.join(codexConfigDir, "mcp.json"), configContents);
+    yield* ensureRuntimeMcpFilesStayIgnored(worktreePath);
   });
 
   const dispatchBootstrapTurnStart = (

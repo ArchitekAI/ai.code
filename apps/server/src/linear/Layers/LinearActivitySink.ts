@@ -1,7 +1,8 @@
 import { type OrchestrationEvent, type OrchestrationThreadActivity } from "@t3tools/contracts";
-import { Effect, Layer, Stream } from "effect";
+import { Effect, Layer, Option, Stream } from "effect";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
+import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { LinearClient } from "../Services/LinearClient.ts";
 import { LinearSessionRegistry } from "../Services/LinearSessionRegistry.ts";
 import {
@@ -9,9 +10,7 @@ import {
   type LinearActivitySinkShape,
 } from "../Services/LinearActivitySink.ts";
 import { formatLinearActivityContent } from "./LinearActivityFormatter.ts";
-
-const latestEntry = <T extends { readonly createdAt: string }>(entries: ReadonlyArray<T>) =>
-  entries.toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)).at(-1);
+import { findLatestLiveLinearSessionContext } from "./LinearSessionContext.ts";
 
 function activityKindToLinearContent(activity: OrchestrationThreadActivity) {
   return formatLinearActivityContent(activity);
@@ -90,8 +89,20 @@ export const mapOrchestrationEventToLinearActivity = (event: OrchestrationEvent)
 
 const makeLinearActivitySink = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
+  const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const sessionRegistry = yield* LinearSessionRegistry;
   const linearClient = yield* LinearClient;
+
+  const lookupThreadContext = Effect.fn("lookupLinearSinkThreadContext")(function* (
+    threadId: string,
+  ) {
+    const snapshot = yield* projectionSnapshotQuery.getSnapshot();
+    const thread =
+      snapshot.threads.find(
+        (entry) => entry.id === threadId && entry.archivedAt === null && entry.deletedAt === null,
+      ) ?? null;
+    return thread === null ? Option.none<(typeof snapshot.threads)[number]>() : Option.some(thread);
+  });
 
   const publishEvent = Effect.fn("publishLinearActivityEvent")(function* (
     event: OrchestrationEvent,
@@ -102,14 +113,18 @@ const makeLinearActivitySink = Effect.gen(function* () {
     }
 
     const sessions = yield* sessionRegistry.listByThreadId(activity.threadId);
-    const session = latestEntry(sessions);
-    if (!session) {
+    const sessionContext = yield* findLatestLiveLinearSessionContext({
+      sessions,
+      lookupThreadContext,
+      removeSession: sessionRegistry.remove,
+    });
+    if (!sessionContext) {
       return;
     }
 
     yield* linearClient
       .createAgentActivity({
-        agentSessionId: session.linearSessionId,
+        agentSessionId: sessionContext.session.linearSessionId,
         content: activity.content,
         ephemeral: activity.ephemeral,
       })
@@ -117,7 +132,7 @@ const makeLinearActivitySink = Effect.gen(function* () {
         Effect.catch((error) =>
           Effect.logWarning("failed to post Linear activity update", {
             threadId: activity.threadId,
-            linearSessionId: session.linearSessionId,
+            linearSessionId: sessionContext.session.linearSessionId,
             detail: error.message,
           }),
         ),

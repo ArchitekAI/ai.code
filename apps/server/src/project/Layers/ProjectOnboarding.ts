@@ -205,7 +205,9 @@ const makeProjectOnboarding = Effect.gen(function* () {
       const nextRouteAliases = normalizeStringList(input.projectAddInput.routeAliases);
       const nextProjectKeys = normalizeStringList(input.projectAddInput.projectKeys);
       const resolvedBaseBranch =
-        input.projectAddInput.baseBranch?.trim() || existingMapping?.baseBranch || input.baseBranch;
+        // Prefer an explicit override, otherwise keep the saved mapping aligned with the
+        // repository's advertised default branch instead of preserving a stale feature branch.
+        input.projectAddInput.baseBranch?.trim() || input.baseBranch || existingMapping?.baseBranch;
       const resolvedRouteKey =
         input.projectAddInput.routeKey?.trim() || existingMapping?.routeKey || input.repositoryName;
       const resolvedRouteAliases = nextRouteAliases ?? existingMapping?.routeAliases;
