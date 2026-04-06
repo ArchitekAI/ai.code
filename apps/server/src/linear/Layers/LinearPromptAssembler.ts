@@ -12,9 +12,7 @@ import {
 } from "../Services/LinearPromptAssembler.ts";
 import type { LinearIssueComment, LinearIssueDetails } from "../Services/LinearClient.ts";
 
-const PROMPTS_DIR = join(dirname(fileURLToPath(import.meta.url)), "../prompts");
-const STANDARD_ISSUE_PROMPT_PATH = join(PROMPTS_DIR, "standard-issue-assigned-user-prompt.md");
-const TODOLIST_EXTENSION_PATH = join(PROMPTS_DIR, "todolist-system-prompt-extension.md");
+const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
 
 const DEBUGGER_LABELS = new Set(["bug", "debugger"]);
 const ORCHESTRATOR_LABELS = new Set(["orchestrator"]);
@@ -158,6 +156,17 @@ function shouldAppendTodoExtension(promptType: PromptType): boolean {
   );
 }
 
+function promptAssetCandidates(filename: string): ReadonlyArray<string> {
+  return [
+    // Source-mode and unbundled builds keep prompts one directory above the layer.
+    join(MODULE_DIR, "../prompts", filename),
+    // The production bundle runs from dist/bin.mjs, so prompt assets live under dist/linear/prompts.
+    join(MODULE_DIR, "linear/prompts", filename),
+    // Keep a flat dist/prompts fallback for future packaging changes.
+    join(MODULE_DIR, "prompts", filename),
+  ];
+}
+
 function buildIssueUpdatePromptText(input: {
   readonly issue: LinearIssueDetails;
   readonly previousTitle?: string;
@@ -222,15 +231,42 @@ ${input.comment.body}
 const makeLinearPromptAssembler = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
 
+  const resolvePromptAssetPath = Effect.fn("resolvePromptAssetPath")(function* (
+    filename: string,
+    detail: string,
+  ) {
+    for (const candidatePath of promptAssetCandidates(filename)) {
+      const exists = yield* fileSystem.exists(candidatePath).pipe(
+        Effect.mapError(
+          (cause) =>
+            new LinearWebhookHandlerError({
+              detail,
+              cause,
+            }),
+        ),
+      );
+      if (exists) {
+        return candidatePath;
+      }
+    }
+
+    return yield* new LinearWebhookHandlerError({
+      detail,
+    });
+  });
+
   const readSystemPromptTemplate = Effect.fn("readSystemPromptTemplate")(function* (
     promptType: PromptType,
   ) {
-    const templatePath = join(PROMPTS_DIR, `${promptType}.md`);
+    const templatePath = yield* resolvePromptAssetPath(
+      `${promptType}.md`,
+      `Failed to load Linear prompt template '${promptType}'.`,
+    );
     const promptTemplate = yield* fileSystem.readFileString(templatePath).pipe(
       Effect.mapError(
         (cause) =>
           new LinearWebhookHandlerError({
-            detail: `Failed to load Linear prompt template '${promptType}'.`,
+            detail: `Failed to read Linear prompt template '${promptType}'.`,
             cause,
           }),
       ),
@@ -240,11 +276,15 @@ const makeLinearPromptAssembler = Effect.gen(function* () {
       return promptTemplate;
     }
 
-    const todoExtension = yield* fileSystem.readFileString(TODOLIST_EXTENSION_PATH).pipe(
+    const todoExtensionPath = yield* resolvePromptAssetPath(
+      "todolist-system-prompt-extension.md",
+      "Failed to load shared Linear todo instructions.",
+    );
+    const todoExtension = yield* fileSystem.readFileString(todoExtensionPath).pipe(
       Effect.mapError(
         (cause) =>
           new LinearWebhookHandlerError({
-            detail: "Failed to load shared Linear todo instructions.",
+            detail: "Failed to read shared Linear todo instructions.",
             cause,
           }),
       ),
@@ -254,17 +294,21 @@ const makeLinearPromptAssembler = Effect.gen(function* () {
     return `${promptTemplate.trimEnd()}\n\n${todoExtension.trim()}\n`;
   });
 
-  const readStandardIssuePromptTemplate = fileSystem
-    .readFileString(STANDARD_ISSUE_PROMPT_PATH)
-    .pipe(
+  const readStandardIssuePromptTemplate = Effect.gen(function* () {
+    const templatePath = yield* resolvePromptAssetPath(
+      "standard-issue-assigned-user-prompt.md",
+      "Failed to load Linear issue-context prompt template.",
+    );
+    return yield* fileSystem.readFileString(templatePath).pipe(
       Effect.mapError(
         (cause) =>
           new LinearWebhookHandlerError({
-            detail: "Failed to load Linear issue-context prompt template.",
+            detail: "Failed to read Linear issue-context prompt template.",
             cause,
           }),
       ),
     );
+  });
 
   const buildIssueContextPromptText = (input: {
     readonly issue: LinearIssueDetails;
