@@ -10,6 +10,7 @@ const defaultIssue = {
   identifier: "ENG-1",
   title: "Fix Linear webhook parity",
   description: "Port the Linear webhook behavior cleanly.",
+  teamId: "team-1",
   teamKey: "ENG",
   state: "Started",
   priority: 2,

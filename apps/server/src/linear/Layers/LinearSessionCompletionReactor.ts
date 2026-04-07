@@ -602,7 +602,7 @@ const make = Effect.gen(function* () {
           Effect.timeout(Duration.minutes(3)),
           Effect.catch((error) =>
             Effect.gen(function* () {
-              const detail = `Automatic shipping failed: ${error instanceof Error ? error.message : String(error)}`;
+              const detail = `Automatic shipping failed: ${typeof error === "object" && error !== null && "message" in error ? String((error as { message: unknown }).message) : String(error)}`;
               console.error("[linear-completion] shipping failed", { detail });
               yield* postActivity({
                 linearSessionId: latestLinearSession.session.linearSessionId,
@@ -641,12 +641,12 @@ const make = Effect.gen(function* () {
         });
       }
 
-      // Best-effort Vercel preview URL detection. Runs in the background and
-      // posts a follow-up activity if a preview is found after the initial
-      // completion response has already been sent.
+      // Best-effort Vercel preview URL detection. Runs after the main
+      // completion response so it doesn't block the terminal response.
       const prNumber = actionResult.pr.number;
       if (prNumber && prWasCreatedOrOpened) {
-        yield* Effect.forkDaemon(
+        // Fire-and-forget: don't await, don't block the response.
+        void Effect.runPromise(
           fetchVercelPreviewUrl({ cwd, prNumber }).pipe(
             Effect.flatMap((previewUrl) => {
               if (!previewUrl) {
@@ -662,14 +662,9 @@ const make = Effect.gen(function* () {
                 ephemeral: false,
               });
             }),
-            Effect.catch((error) =>
-              Effect.logWarning("vercel preview detection failed", {
-                prNumber,
-                error: error instanceof Error ? error.message : String(error),
-              }),
-            ),
+            Effect.catch(() => Effect.void),
           ),
-        );
+        ).catch(() => {});
       }
 
       // Cyrus treats terminal narration as a session concern. We mirror that here
@@ -705,7 +700,10 @@ const make = Effect.gen(function* () {
         Effect.logWarning("linear session completion reactor failed to process event", {
           threadId: completionCandidateThreadId(event),
           eventType: event.type,
-          error: error instanceof Error ? error.message : String(error),
+          error:
+            typeof error === "object" && error !== null && "message" in error
+              ? String((error as { message: unknown }).message)
+              : String(error),
         }),
       ),
     ),

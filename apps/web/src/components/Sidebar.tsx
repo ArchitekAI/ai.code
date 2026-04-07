@@ -3,6 +3,7 @@ import {
   ArrowUpDownIcon,
   ChevronRightIcon,
   FolderIcon,
+  GitBranchIcon,
   GitPullRequestIcon,
   PlusIcon,
   SettingsIcon,
@@ -78,6 +79,7 @@ import { deleteProjectCascade } from "../lib/deleteProjectCascade";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { toastManager } from "./ui/toast";
 import { formatRelativeTimeLabel } from "../timestampFormat";
+import { AddRepositoryDialog } from "./AddRepositoryDialog";
 import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
 import {
   getArm64IntelBuildWarningDescription,
@@ -145,7 +147,7 @@ const SIDEBAR_LIST_ANIMATION_OPTIONS = {
   easing: "ease-out",
 } as const;
 
-function looksLikeRepositoryUrl(value: string): boolean {
+export function looksLikeRepositoryUrl(value: string): boolean {
   // Let remote users paste either HTTPS or SSH Git remotes into the add-project field.
   return /^(?:https?:\/\/|ssh:\/\/|git@)/i.test(value) || value.trim().endsWith(".git");
 }
@@ -713,6 +715,7 @@ export default function Sidebar() {
   });
   const keybindings = useServerKeybindings();
   const [addingProject, setAddingProject] = useState(false);
+  const [addRepoDialogOpen, setAddRepoDialogOpen] = useState(false);
   const [newCwd, setNewCwd] = useState("");
   const [isPickingFolder, setIsPickingFolder] = useState(false);
   const [isAddingProject, setIsAddingProject] = useState(false);
@@ -2144,6 +2147,21 @@ export default function Sidebar() {
                       render={
                         <button
                           type="button"
+                          aria-label="Add Git repository"
+                          className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"
+                          onClick={() => setAddRepoDialogOpen(true)}
+                        />
+                      }
+                    >
+                      <GitBranchIcon className="size-3.5" />
+                    </TooltipTrigger>
+                    <TooltipPopup side="right">Add Git repository</TooltipPopup>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <button
+                          type="button"
                           aria-label={
                             shouldShowProjectPathEntry ? "Cancel add project" : "Add project"
                           }
@@ -2279,6 +2297,16 @@ export default function Sidebar() {
           </SidebarFooter>
         </>
       )}
+      <AddRepositoryDialog
+        open={addRepoDialogOpen}
+        onOpenChange={setAddRepoDialogOpen}
+        onSuccess={(result) => {
+          toastManager.add({
+            type: "success",
+            title: `Added ${result.title}`,
+          });
+        }}
+      />
     </>
   );
 }
