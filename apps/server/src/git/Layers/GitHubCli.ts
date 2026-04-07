@@ -90,7 +90,8 @@ const RawGitHubPullRequestSchema = Schema.Struct({
   headRepository: Schema.optional(
     Schema.NullOr(
       Schema.Struct({
-        nameWithOwner: Schema.String,
+        nameWithOwner: Schema.optional(Schema.String),
+        name: Schema.optional(Schema.String),
       }),
     ),
   ),
@@ -112,7 +113,14 @@ const RawGitHubRepositoryCloneUrlsSchema = Schema.Struct({
 function normalizePullRequestSummary(
   raw: Schema.Schema.Type<typeof RawGitHubPullRequestSchema>,
 ): GitHubPullRequestSummary {
-  const headRepositoryNameWithOwner = raw.headRepository?.nameWithOwner ?? null;
+  // `gh pr list --json headRepository` returns `{ id, name }` by default,
+  // not `{ nameWithOwner }`. Reconstruct nameWithOwner from owner + name
+  // when the explicit field is missing.
+  const headRepositoryNameWithOwner =
+    raw.headRepository?.nameWithOwner ??
+    (raw.headRepositoryOwner?.login && raw.headRepository?.name
+      ? `${raw.headRepositoryOwner.login}/${raw.headRepository.name}`
+      : null);
   const headRepositoryOwnerLogin =
     raw.headRepositoryOwner?.login ??
     (typeof headRepositoryNameWithOwner === "string" && headRepositoryNameWithOwner.includes("/")
