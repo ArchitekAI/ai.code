@@ -320,12 +320,18 @@ const make = Effect.gen(function* () {
         ephemeral: input.ephemeral,
       })
       .pipe(
-        Effect.catch((error) =>
-          Effect.logWarning("failed to post linear completion activity", {
+        Effect.catch((error) => {
+          // Log to both Effect and stderr so the error is visible in journalctl.
+          console.error("[linear-completion] failed to post activity", {
+            linearSessionId: input.linearSessionId,
+            contentType: (input.content as Record<string, unknown>).type,
+            error: error.message,
+          });
+          return Effect.logWarning("failed to post linear completion activity", {
             linearSessionId: input.linearSessionId,
             error: error.message,
-          }),
-        ),
+          });
+        }),
       );
   });
 
@@ -334,6 +340,11 @@ const make = Effect.gen(function* () {
     readonly body: string;
   }) {
     // Cyrus treats the final response as a durable terminal event for the session.
+    // The `type: "response"` activity signals Linear that the agent is done working.
+    console.log("[linear-completion] posting terminal response", {
+      linearSessionId: input.linearSessionId,
+      bodyLength: input.body.length,
+    });
     yield* postActivity({
       linearSessionId: input.linearSessionId,
       content: {
@@ -469,6 +480,16 @@ const make = Effect.gen(function* () {
       const shippingAction = resolveLinearShippingAction(gitStatus);
 
       if (!shippingAction) {
+        // When the agent already created the PR, move issue to "In Review"
+        // even though the completion reactor didn't need to ship.
+        if (gitStatus.pr) {
+          yield* moveIssueToReviewState({
+            issueId: latestLinearSession.session.issueId,
+            issueIdentifier: latestLinearSession.session.issueIdentifier,
+            teamId: yield* resolveTeamIdForIssue(latestLinearSession.session.issueId),
+          });
+        }
+
         const noOpResponse = buildLinearCompletionResponse({
           assistantSummary,
           status: gitStatus,
