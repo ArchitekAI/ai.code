@@ -475,8 +475,20 @@ const make = Effect.gen(function* () {
         return;
       }
 
+      console.log("[linear-completion] checking git status", { cwd });
       const statusResult = yield* gitManager.status({ cwd }).pipe(Effect.exit);
       const assistantSummary = findAssistantSummary(thread);
+      console.log("[linear-completion] git status result", {
+        success: Exit.isSuccess(statusResult),
+        assistantSummaryLen: assistantSummary.length,
+        ...(Exit.isSuccess(statusResult)
+          ? {
+              hasWorkingTreeChanges: statusResult.value.hasWorkingTreeChanges,
+              aheadCount: statusResult.value.aheadCount,
+              hasPr: !!statusResult.value.pr,
+            }
+          : {}),
+      });
       if (Exit.isFailure(statusResult)) {
         const detail = `Failed to inspect git status: ${statusResult.cause.toString()}`;
         yield* postActivity({
@@ -501,6 +513,7 @@ const make = Effect.gen(function* () {
       const gitStatus: GitStatusResult = statusResult.value;
       const shippingAction = resolveLinearShippingAction(gitStatus);
 
+      console.log("[linear-completion] shipping action", { shippingAction });
       if (!shippingAction) {
         // When the agent already created the PR, move issue to "In Review"
         // even though the completion reactor didn't need to ship.
