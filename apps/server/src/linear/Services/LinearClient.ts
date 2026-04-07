@@ -7,6 +7,7 @@ export interface LinearIssueDetails {
   readonly identifier: string;
   readonly title: string;
   readonly description: string;
+  readonly teamId: string;
   readonly teamKey: string;
   readonly state: string;
   readonly priority: number;
@@ -28,6 +29,13 @@ export interface LinearIssueStateDetails {
   readonly id: string;
   readonly name: string;
   readonly type?: string;
+}
+
+export interface LinearWorkflowState {
+  readonly id: string;
+  readonly name: string;
+  readonly type: string;
+  readonly position: number;
 }
 
 export interface LinearAgentActivityInput {
@@ -113,6 +121,13 @@ export interface LinearClientShape {
     readonly limit?: number;
     readonly includeArchived?: boolean;
   }) => Effect.Effect<ReadonlyArray<LinearChildIssue>, LinearActivitySinkError>;
+  readonly fetchTeamWorkflowStates: (
+    teamId: string,
+  ) => Effect.Effect<ReadonlyArray<LinearWorkflowState>, LinearActivitySinkError>;
+  readonly updateIssueState: (
+    issueId: string,
+    stateId: string,
+  ) => Effect.Effect<void, LinearActivitySinkError>;
 }
 
 export class LinearClient extends ServiceMap.Service<LinearClient, LinearClientShape>()(

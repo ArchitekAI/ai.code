@@ -194,6 +194,7 @@ const makeLinearClient = Effect.gen(function* () {
         identifier: issue.identifier,
         title: issue.title,
         description: issue.description ?? "",
+        teamId: team?.id ?? "",
         teamKey: team?.key ?? "",
         state: state?.name ?? "",
         priority: issue.priority,
@@ -378,6 +379,23 @@ const makeLinearClient = Effect.gen(function* () {
       );
     });
 
+  const fetchTeamWorkflowStates: LinearClientShape["fetchTeamWorkflowStates"] = (teamId) =>
+    runWithSdkClient(`Failed to fetch workflow states for team ${teamId}.`, async (client) => {
+      const team = await client.team(teamId);
+      const statesConnection = await team.states();
+      return statesConnection.nodes.map((state) => ({
+        id: state.id,
+        name: state.name,
+        type: typeof state.type === "string" ? state.type : "",
+        position: typeof state.position === "number" ? state.position : 0,
+      }));
+    });
+
+  const updateIssueState: LinearClientShape["updateIssueState"] = (issueId, stateId) =>
+    runWithSdkClient(`Failed to update state for issue ${issueId}.`, async (client) => {
+      await client.updateIssue(issueId, { stateId });
+    });
+
   return {
     createAgentActivity,
     fetchIssue,
@@ -390,6 +408,8 @@ const makeLinearClient = Effect.gen(function* () {
     getAgentSession,
     createIssueRelation,
     listChildIssues,
+    fetchTeamWorkflowStates,
+    updateIssueState,
   } satisfies LinearClientShape;
 });
 

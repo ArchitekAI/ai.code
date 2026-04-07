@@ -24,6 +24,29 @@ For each entry, capture:
 
 ## 2026-04-06
 
+### Linear issue lifecycle state transitions and PR notification
+
+- Status: Local-only
+- Merge risk: Medium
+- User context: The user wanted Cyrus-style automatic issue state transitions so Linear issues move to "In Progress" when the agent starts working and to "In Review" when a PR is created, with PR link and Vercel preview URL included in the completion response.
+- Why: Cyrus automatically moves issues to the lowest-position "started" workflow state when the agent begins. This fork now mirrors that behavior and extends it with an automatic "In Review" transition after PR creation, plus best-effort Vercel preview URL detection from GitHub PR checks.
+- Behavior:
+  - When a new Linear agent session is bootstrapped, the issue is moved to the lowest-position "started" workflow state (typically "In Progress") using the team's workflow state taxonomy, matching Cyrus's `moveIssueToStartedState` behavior.
+  - When the Linear session completion reactor creates or opens a PR, the issue is moved to the highest-position "started" workflow state (typically "In Review"). If the team only has one "started" state, the transition is skipped.
+  - After PR creation, a background task polls GitHub PR checks for Vercel deployment URLs and posts a follow-up "Preview deployment ready" activity if found.
+  - The completion response now includes the PR link, branch name, and (when available) the Vercel preview URL.
+  - Both state transitions are fire-and-forget: failures are logged as warnings and never block the primary session flow.
+  - Comment steering during active execution works via the existing `handlePrompted` webhook handler, which dispatches user comments as new turns to the running provider session.
+- Files:
+  - `apps/server/src/linear/Services/LinearClient.ts` — added `LinearWorkflowState` type, `teamId` to issue details, `fetchTeamWorkflowStates` and `updateIssueState` methods
+  - `apps/server/src/linear/Layers/LinearClient.ts` — implemented new Linear SDK methods
+  - `apps/server/src/linear/Layers/LinearIssueLifecycle.ts` — new shared module for issue state transitions
+  - `apps/server/src/linear/Layers/LinearWebhookHandler.ts` — calls `moveIssueToInProgress` on session start
+  - `apps/server/src/linear/Layers/LinearSessionCompletionReactor.ts` — calls `moveIssueToReviewState` after PR creation, adds Vercel preview URL detection
+  - `apps/server/src/linear/Layers/LinearWebhookHandler.test.ts` — updated mock with new client methods and teamId
+  - `apps/server/src/server.test.ts` — updated mock with new client methods
+- Notes: The "In Review" transition goes beyond Cyrus parity (Cyrus only does "In Progress"). The Vercel preview detection uses the `gh` CLI and is best-effort — it will silently no-op if `gh` is not available or if the repo has no Vercel integration.
+
 ### Cyrus-style Linear action/result feed formatting
 
 - Status: Local-only

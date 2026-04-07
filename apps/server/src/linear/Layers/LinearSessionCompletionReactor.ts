@@ -1,3 +1,5 @@
+import { exec } from "node:child_process";
+
 import {
   type GitActionProgressEvent,
   type GitRunStackedActionResult,
@@ -19,6 +21,7 @@ import {
   LinearSessionCompletionReactor,
   type LinearSessionCompletionReactorShape,
 } from "../Services/LinearSessionCompletionReactor.ts";
+import { moveIssueToReviewState } from "./LinearIssueLifecycle.ts";
 import { findLatestLiveLinearSessionContext } from "./LinearSessionContext.ts";
 
 type CompletionCandidateEvent = Extract<
@@ -112,6 +115,7 @@ function findAssistantSummary(thread: OrchestrationThread): string {
 function summarizePullRequest(
   result: Pick<GitRunStackedActionResult, "pr" | "push" | "branch"> | null,
   status: Pick<GitStatusResult, "pr" | "branch">,
+  previewUrl?: string | null,
 ): string | null {
   const prUrl = result?.pr.url ?? status.pr?.url ?? null;
   if (!prUrl) {
@@ -125,6 +129,7 @@ function summarizePullRequest(
     prTitle ? `Pull request: ${prTitle}` : "Pull request is ready.",
     `PR: ${prUrl}`,
     headBranch ? `Branch: ${headBranch}` : null,
+    previewUrl ? `Preview: ${previewUrl}` : null,
   ].filter((value): value is string => value !== null);
   return lines.join("\n");
 }
@@ -133,9 +138,10 @@ export function buildLinearCompletionResponse(input: {
   readonly assistantSummary: string;
   readonly status: Pick<GitStatusResult, "pr" | "branch">;
   readonly result: Pick<GitRunStackedActionResult, "pr" | "push" | "branch"> | null;
+  readonly previewUrl?: string | null;
 }): string | null {
   const summary = input.assistantSummary.trim();
-  const prSummary = summarizePullRequest(input.result, input.status);
+  const prSummary = summarizePullRequest(input.result, input.status, input.previewUrl);
 
   if (!summary && !prSummary) {
     return "Finished work on this issue.";
@@ -147,6 +153,95 @@ export function buildLinearCompletionResponse(input: {
     return prSummary;
   }
   return `${summary}\n\n${prSummary}`;
+}
+
+// ---------------------------------------------------------------------------
+// Vercel preview URL detection
+// ---------------------------------------------------------------------------
+
+const VERCEL_POLL_ATTEMPTS = 6;
+const VERCEL_POLL_DELAY = Duration.seconds(10);
+
+/**
+ * Best-effort detection of a Vercel preview deployment URL from GitHub PR checks.
+ *
+ * Uses `gh pr checks` to find a Vercel check run with a preview URL. Polls a
+ * few times to give Vercel time to start the deployment. Returns null if the
+ * `gh` CLI is unavailable, the PR has no Vercel check, or the check hasn't
+ * completed within the polling window.
+ */
+function fetchVercelPreviewUrl(input: {
+  readonly cwd: string;
+  readonly prNumber: number;
+}): Effect.Effect<string | null> {
+  return Effect.gen(function* () {
+    // Initial delay to give Vercel time to register the check
+    yield* Effect.sleep(Duration.seconds(15));
+
+    for (let attempt = 0; attempt < VERCEL_POLL_ATTEMPTS; attempt += 1) {
+      const result = yield* Effect.tryPromise({
+        try: () =>
+          new Promise<string>((resolve, reject) => {
+            exec(
+              `gh pr checks ${input.prNumber} --json name,detailsUrl,state`,
+              { cwd: input.cwd, timeout: 10_000 },
+              (error, stdout) => {
+                if (error) {
+                  reject(error);
+                } else {
+                  resolve(stdout.trim());
+                }
+              },
+            );
+          }),
+        catch: () => null,
+      });
+
+      if (!result) {
+        return null;
+      }
+
+      const checks: ReadonlyArray<{
+        name?: string;
+        detailsUrl?: string;
+        state?: string;
+      }> = (() => {
+        try {
+          return JSON.parse(result) as typeof checks;
+        } catch {
+          return [];
+        }
+      })();
+
+      // Look for a completed Vercel check with a details URL
+      const vercelCheck = checks.find(
+        (check) =>
+          check.name?.toLowerCase().includes("vercel") &&
+          check.state?.toUpperCase() === "SUCCESS" &&
+          check.detailsUrl?.trim(),
+      );
+
+      if (vercelCheck?.detailsUrl) {
+        return vercelCheck.detailsUrl.trim();
+      }
+
+      // Also check for deployment status checks that contain vercel URLs
+      const deploymentCheck = checks.find(
+        (check) =>
+          check.detailsUrl?.includes("vercel.app") && check.state?.toUpperCase() === "SUCCESS",
+      );
+
+      if (deploymentCheck?.detailsUrl) {
+        return deploymentCheck.detailsUrl.trim();
+      }
+
+      if (attempt < VERCEL_POLL_ATTEMPTS - 1) {
+        yield* Effect.sleep(VERCEL_POLL_DELAY);
+      }
+    }
+
+    return null;
+  }).pipe(Effect.catch(() => Effect.succeed(null)));
 }
 
 function gitProgressToLinearActivity(event: GitActionProgressEvent) {
@@ -247,6 +342,13 @@ const make = Effect.gen(function* () {
       },
       ephemeral: false,
     });
+  });
+
+  const resolveTeamIdForIssue = Effect.fn("resolveTeamIdForIssue")(function* (issueId: string) {
+    const issue = yield* linearClient
+      .fetchIssue(issueId)
+      .pipe(Effect.catch(() => Effect.succeed(null)));
+    return issue?.teamId ?? "";
   });
 
   const hasProcessedTurn = Effect.fn("hasProcessedLinearTurn")(function* (input: {
@@ -444,6 +546,49 @@ const make = Effect.gen(function* () {
           turnId,
         });
         return;
+      }
+
+      // Move issue to "In Review" after successful PR creation.
+      // Fire-and-forget — don't block the completion response on this.
+      const prWasCreatedOrOpened =
+        actionResult.pr.status === "created" || actionResult.pr.status === "opened_existing";
+      if (prWasCreatedOrOpened) {
+        yield* moveIssueToReviewState({
+          issueId: latestLinearSession.session.issueId,
+          issueIdentifier: latestLinearSession.session.issueIdentifier,
+          teamId: yield* resolveTeamIdForIssue(latestLinearSession.session.issueId),
+        });
+      }
+
+      // Best-effort Vercel preview URL detection. Runs in the background and
+      // posts a follow-up activity if a preview is found after the initial
+      // completion response has already been sent.
+      const prNumber = actionResult.pr.number;
+      if (prNumber && prWasCreatedOrOpened) {
+        yield* Effect.forkDaemon(
+          fetchVercelPreviewUrl({ cwd, prNumber }).pipe(
+            Effect.flatMap((previewUrl) => {
+              if (!previewUrl) {
+                return Effect.void;
+              }
+              return postActivity({
+                linearSessionId: latestLinearSession.session.linearSessionId,
+                content: {
+                  type: "action",
+                  action: "Preview deployment ready",
+                  parameter: previewUrl,
+                },
+                ephemeral: false,
+              });
+            }),
+            Effect.catch((error) =>
+              Effect.logWarning("vercel preview detection failed", {
+                prNumber,
+                error: error instanceof Error ? error.message : String(error),
+              }),
+            ),
+          ),
+        );
       }
 
       // Cyrus treats terminal narration as a session concern. We mirror that here

@@ -439,6 +439,8 @@ const buildAppUnderTest = (options?: {
       getAgentSession: () => Effect.die("unused"),
       createIssueRelation: () => Effect.void,
       listChildIssues: () => Effect.succeed([]),
+      fetchTeamWorkflowStates: () => Effect.succeed([]),
+      updateIssueState: () => Effect.void,
       ...options?.layers?.linearClient,
     });
     const linearSessionRegistryLayer = Layer.mock(LinearSessionRegistry)({

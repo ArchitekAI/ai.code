@@ -208,6 +208,7 @@ const defaultIssueDetails: LinearIssueDetails = {
   identifier: "ENG-1",
   title: "Fix Linear webhook parity",
   description: "Port the Linear webhook behavior cleanly.",
+  teamId: "team-1",
   teamKey: "ENG",
   state: "Started",
   priority: 2,
@@ -356,6 +357,12 @@ const makeHandlerLayer = (input: {
         fetchIssue: () => Effect.succeed(issueDetails),
         fetchIssueComments: () => Effect.succeed(issueComments),
         fetchIssueState: () => Effect.succeed(issueState),
+        fetchTeamWorkflowStates: () =>
+          Effect.succeed([
+            { id: "state-in-progress", name: "In Progress", type: "started", position: 1 },
+            { id: "state-in-review", name: "In Review", type: "started", position: 2 },
+          ]),
+        updateIssueState: () => Effect.void,
       }),
     ),
     Layer.provideMerge(
