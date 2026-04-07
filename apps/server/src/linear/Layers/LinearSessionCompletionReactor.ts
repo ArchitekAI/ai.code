@@ -415,16 +415,28 @@ const make = Effect.gen(function* () {
   const processCompletionCandidateThread = Effect.fn("processLinearCompletionCandidateThread")(
     function* (event: CompletionCandidateEvent) {
       const threadId = completionCandidateThreadId(event);
+      console.log("[linear-completion] processing candidate event", {
+        type: event.type,
+        threadId,
+        turnId: completionCandidateTurnId(event),
+      });
       const settledContext = yield* loadSettledCompletionContext({
         threadId,
         eventTurnId: completionCandidateTurnId(event),
       });
       if (!settledContext) {
+        console.log("[linear-completion] settled context was null, skipping", { threadId });
         return;
       }
       const { snapshot, thread } = settledContext;
+      console.log("[linear-completion] settled", {
+        threadId: thread.id,
+        turnState: thread.latestTurn?.state,
+        sessionStatus: thread.session?.status,
+      });
       const latestTurn = thread.latestTurn;
       if (!latestTurn) {
+        console.log("[linear-completion] no latest turn, skipping");
         return;
       }
 
@@ -434,6 +446,7 @@ const make = Effect.gen(function* () {
         turnId,
       });
       if (alreadyProcessed) {
+        console.log("[linear-completion] turn already processed, skipping", { turnId });
         return;
       }
 
@@ -444,12 +457,21 @@ const make = Effect.gen(function* () {
         removeSession: sessionRegistry.remove,
       });
       if (!latestLinearSession) {
+        console.log("[linear-completion] no linear session found for thread", {
+          threadId: thread.id,
+          sessionCount: threadSessions.length,
+        });
         return;
       }
+      console.log("[linear-completion] found linear session", {
+        linearSessionId: latestLinearSession.session.linearSessionId,
+        issueIdentifier: latestLinearSession.session.issueIdentifier,
+      });
 
       const project = snapshot.projects.find((entry) => entry.id === thread.projectId) ?? null;
       const cwd = thread.worktreePath ?? project?.workspaceRoot ?? null;
       if (!cwd) {
+        console.log("[linear-completion] no cwd, skipping");
         return;
       }
 
