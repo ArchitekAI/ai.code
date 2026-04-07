@@ -41,10 +41,12 @@ export interface LinearPromptAssemblerShape {
     readonly guidance?: ReadonlyArray<LinearPromptAssemblerGuidanceRule>;
     readonly promptType?: PromptType;
     readonly repositoryRoutingContext?: string;
+    readonly attachmentManifest?: string;
   }) => Effect.Effect<LinearPromptAssembly, LinearWebhookHandlerError>;
   readonly assembleContinuationPrompt: (input: {
     readonly comment: LinearPromptAssemblerCommentContext;
     readonly promptType?: PromptType;
+    readonly attachmentManifest?: string;
   }) => Effect.Effect<LinearPromptAssembly, LinearWebhookHandlerError>;
   readonly assembleIssueUpdatePrompt: (input: {
     readonly issue: LinearIssueDetails;

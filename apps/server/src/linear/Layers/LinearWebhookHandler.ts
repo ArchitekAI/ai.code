@@ -53,6 +53,7 @@ import {
   LinearWebhookHandler,
   type LinearWebhookHandlerShape,
 } from "../Services/LinearWebhookHandler.ts";
+import { downloadCommentAttachments, downloadIssueAttachments } from "./LinearAttachmentService.ts";
 import { moveIssueToInProgress } from "./LinearIssueLifecycle.ts";
 import {
   dedupeLinearSessions,
@@ -699,6 +700,17 @@ const makeLinearWebhookHandler = Effect.gen(function* () {
     new Map<string, PendingRepositorySelection>(),
   );
 
+  const resolveLinearToken = Effect.fn("resolveLinearToken")(function* () {
+    const settings = yield* serverSettings.getSettings;
+    const directToken = settings.linear.apiToken.trim();
+    if (directToken) {
+      return directToken;
+    }
+    // Fallback to OAuth token if available — imported via LinearOAuth in LinearClient
+    // but we access it through the settings OAuth workspace.
+    return settings.linear.oauth.workspace?.accessToken ?? null;
+  });
+
   const dispatchCommand = Effect.fn("dispatchCommand")(function* (
     command: Parameters<typeof orchestrationEngine.dispatch>[0],
   ) {
@@ -951,6 +963,18 @@ const makeLinearWebhookHandler = Effect.gen(function* () {
     const threadId = ThreadId.makeUnsafe(crypto.randomUUID());
     const branchName = sanitizeFeatureBranchName(`${input.issue.identifier} ${input.issue.title}`);
     const worktreePath = path.join(input.mapping.workspaceRoot, branchName);
+
+    // Download attachments from issue description and comments before prompt
+    // assembly so the manifest can be included in the prompt.
+    const attachmentsDir = path.join(worktreePath, ".t3-attachments");
+    const linearToken = yield* resolveLinearToken();
+    const attachmentResult = yield* downloadIssueAttachments({
+      issueDescription: input.issue.description,
+      commentBodies: input.issueComments.map((c) => c.body),
+      attachmentsDir,
+      token: linearToken,
+    });
+
     const promptAssembly = yield* promptAssembler.assembleNewSessionPrompt({
       issue: input.issue,
       comments: input.issueComments,
@@ -961,6 +985,7 @@ const makeLinearWebhookHandler = Effect.gen(function* () {
       ...(repositoryRoutingContext ? { repositoryRoutingContext } : {}),
       ...(input.newComment ? { newComment: input.newComment } : {}),
       ...(input.guidance ? { guidance: input.guidance } : {}),
+      ...(attachmentResult.manifest ? { attachmentManifest: attachmentResult.manifest } : {}),
     });
     const toolPolicy = yield* resolveToolPolicy({
       promptType: promptAssembly.promptType,
@@ -1353,9 +1378,26 @@ const makeLinearWebhookHandler = Effect.gen(function* () {
       labelNames: fetchedIssue.labelNames,
       mapping,
     });
+    // Download any new attachments from the continuation comment.
+    const commentBody = promptFromPromptedWebhook(webhook);
+    const continuationAttachmentsDir = targetSession.thread.worktreePath
+      ? path.join(targetSession.thread.worktreePath, ".t3-attachments")
+      : null;
+    const continuationToken = yield* resolveLinearToken();
+    const commentAttachmentResult = continuationAttachmentsDir
+      ? yield* downloadCommentAttachments({
+          commentBody,
+          attachmentsDir: continuationAttachmentsDir,
+          token: continuationToken,
+        })
+      : null;
+
     const promptAssembly = yield* promptAssembler.assembleContinuationPrompt({
       comment: continuationCommentFromPromptedWebhook(webhook),
       promptType,
+      ...(commentAttachmentResult?.manifest
+        ? { attachmentManifest: commentAttachmentResult.manifest }
+        : {}),
     });
     const toolPolicy = yield* resolveToolPolicy({
       promptType: promptAssembly.promptType,

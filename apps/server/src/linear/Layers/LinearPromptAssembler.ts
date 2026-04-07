@@ -414,6 +414,12 @@ IMPORTANT: Focus specifically on addressing the new comment above. This is a new
       });
       prompt += formatAgentGuidance(input.guidance);
 
+      // Cyrus appends the attachment manifest after all other prompt sections
+      // so the agent knows about available images/files from the issue.
+      if (input.attachmentManifest?.trim()) {
+        prompt += `\n\n${input.attachmentManifest}`;
+      }
+
       return {
         prompt,
         systemPromptPrefix,
@@ -425,8 +431,14 @@ IMPORTANT: Focus specifically on addressing the new comment above. This is a new
     Effect.fn("assembleContinuationPrompt")(function* (input) {
       const promptType = input.promptType ?? "builder";
       const systemPromptPrefix = yield* readSystemPromptTemplate(promptType);
+      let prompt = buildContinuationPromptText(input);
+
+      if (input.attachmentManifest?.trim()) {
+        prompt += `\n\n${input.attachmentManifest}`;
+      }
+
       return {
-        prompt: buildContinuationPromptText(input),
+        prompt,
         systemPromptPrefix,
         promptType,
       };
