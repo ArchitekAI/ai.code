@@ -30,8 +30,8 @@ type CompletionCandidateEvent = Extract<
 >;
 type LinearShippingAction = "commit_push_pr" | "create_pr";
 
-const COMPLETION_SETTLE_ATTEMPTS = 8;
-const COMPLETION_SETTLE_DELAY = Duration.millis(250);
+const COMPLETION_SETTLE_ATTEMPTS = 20;
+const COMPLETION_SETTLE_DELAY = Duration.millis(500);
 
 export function resolveLinearShippingAction(
   status: Pick<GitStatusResult, "isRepo" | "hasWorkingTreeChanges" | "aheadCount" | "pr">,
@@ -55,10 +55,12 @@ export function isLinearCompletionCandidateStatus(
 }
 
 function canSettleLinearCompletion(status: OrchestrationSessionStatus): boolean {
-  // Provider teardown can lag behind the final assistant turn. Let completed turns
-  // ship while the session is still marked running so Linear doesn't get stuck in
-  // an endless "Working" state after the useful work is already done.
-  return status === "running" || status === "ready" || status === "stopped";
+  // Only settle for Linear completion when the provider session has actually
+  // finished. Accepting "running" caused the reactor to fire prematurely after
+  // the agent's first turn (analysis) before it had done the real work.
+  // Cyrus avoids this because its runner explicitly signals completion. In T3
+  // Code, "ready" (Codex idle) or "stopped" reliably indicates the agent is done.
+  return status === "ready" || status === "stopped";
 }
 
 export function isLinearCompletionTriggerEvent(
