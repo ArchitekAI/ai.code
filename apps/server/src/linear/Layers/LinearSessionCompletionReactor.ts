@@ -512,16 +512,24 @@ const make = Effect.gen(function* () {
 
       const gitStatus: GitStatusResult = statusResult.value;
 
-      // When the agent already created and pushed a PR, skip automatic shipping
-      // and go straight to posting the terminal response. The agent's verify-and-
-      // ship prompt extension handles commit/push/PR creation. Attempting to ship
-      // again can cause the completion reactor to hang on redundant git operations.
+      // Linear-triggered sessions use the verify-and-ship prompt extension which
+      // instructs the agent to commit, push, and create a PR. The completion
+      // reactor should only run automatic shipping when the agent genuinely left
+      // work un-shipped (ahead commits but no PR). We skip shipping when:
+      //   - a PR already exists (agent shipped successfully)
+      //   - the working tree is dirty but no commits are ahead (leftover lockfile
+      //     changes from `bun install` etc. — not worth a separate commit)
+      //
+      // This prevents the reactor from hanging on redundant git operations which
+      // was blocking the terminal `response` activity from being posted.
       const agentAlreadyShipped = !!gitStatus.pr;
-      const shippingAction = agentAlreadyShipped ? null : resolveLinearShippingAction(gitStatus);
+      const hasUnshippedCommits = gitStatus.aheadCount > 0 && !gitStatus.pr;
+      const shippingAction = hasUnshippedCommits ? resolveLinearShippingAction(gitStatus) : null;
 
       console.log("[linear-completion] shipping decision", {
         shippingAction,
         agentAlreadyShipped,
+        hasUnshippedCommits,
         hasPr: !!gitStatus.pr,
         hasWorkingTreeChanges: gitStatus.hasWorkingTreeChanges,
         aheadCount: gitStatus.aheadCount,
