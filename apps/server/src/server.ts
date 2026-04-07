@@ -32,6 +32,7 @@ import { OrchestrationProjectionSnapshotQueryLive } from "./orchestration/Layers
 import { CheckpointStoreLive } from "./checkpointing/Layers/CheckpointStore";
 import { GitCoreLive } from "./git/Layers/GitCore";
 import { GitHubCliLive } from "./git/Layers/GitHubCli";
+import { GitStatusBroadcasterLive } from "./git/Layers/GitStatusBroadcaster";
 import { RoutingTextGenerationLive } from "./git/Layers/RoutingTextGeneration";
 import { TerminalManagerLive } from "./terminal/Layers/Manager";
 import { GitManagerLive } from "./git/Layers/GitManager";
@@ -218,12 +219,17 @@ const GitManagerRuntimeLive = GitManagerLive.pipe(
   Layer.provide(ServerSettingsLive),
 );
 
+const GitStatusBroadcasterRuntimeLive = GitStatusBroadcasterLive.pipe(
+  Layer.provide(GitManagerRuntimeLive),
+);
+
 const GitLayerLive = Layer.mergeAll(
   GitCoreLive,
   GitHubCliLive,
   RoutingTextGenerationLive,
   ProjectSetupScriptRuntimeLive,
   GitManagerRuntimeLive,
+  GitStatusBroadcasterRuntimeLive,
 );
 
 const BootstrapTurnRuntimeLive = BootstrapTurnServiceLive.pipe(
