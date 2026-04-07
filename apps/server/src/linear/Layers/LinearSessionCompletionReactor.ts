@@ -511,12 +511,24 @@ const make = Effect.gen(function* () {
       }
 
       const gitStatus: GitStatusResult = statusResult.value;
-      const shippingAction = resolveLinearShippingAction(gitStatus);
 
-      console.log("[linear-completion] shipping action", { shippingAction });
+      // When the agent already created and pushed a PR, skip automatic shipping
+      // and go straight to posting the terminal response. The agent's verify-and-
+      // ship prompt extension handles commit/push/PR creation. Attempting to ship
+      // again can cause the completion reactor to hang on redundant git operations.
+      const agentAlreadyShipped = !!gitStatus.pr;
+      const shippingAction = agentAlreadyShipped ? null : resolveLinearShippingAction(gitStatus);
+
+      console.log("[linear-completion] shipping decision", {
+        shippingAction,
+        agentAlreadyShipped,
+        hasPr: !!gitStatus.pr,
+        hasWorkingTreeChanges: gitStatus.hasWorkingTreeChanges,
+        aheadCount: gitStatus.aheadCount,
+      });
+
       if (!shippingAction) {
-        // When the agent already created the PR, move issue to "In Review"
-        // even though the completion reactor didn't need to ship.
+        // When the agent already created the PR, move issue to "In Review".
         if (gitStatus.pr) {
           yield* moveIssueToReviewState({
             issueId: latestLinearSession.session.issueId,
