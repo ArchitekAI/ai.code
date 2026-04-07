@@ -566,6 +566,7 @@ const make = Effect.gen(function* () {
         },
       };
 
+      console.log("[linear-completion] running stacked action", { shippingAction, cwd });
       const actionEffect = gitManager
         .runStackedAction(
           {
@@ -576,9 +577,11 @@ const make = Effect.gen(function* () {
           { progressReporter },
         )
         .pipe(
+          Effect.timeout(Duration.minutes(3)),
           Effect.catch((error) =>
             Effect.gen(function* () {
-              const detail = `Automatic shipping failed: ${error.message}`;
+              const detail = `Automatic shipping failed: ${error instanceof Error ? error.message : String(error)}`;
+              console.error("[linear-completion] shipping failed", { detail });
               yield* postActivity({
                 linearSessionId: latestLinearSession.session.linearSessionId,
                 content: {
