@@ -84,6 +84,95 @@ type RepositoryRoutingResolution =
   | { readonly type: "selection"; readonly mappings: ReadonlyArray<LinearProjectMapping> }
   | { readonly type: "none" };
 
+// ---------------------------------------------------------------------------
+// Content-based repo inference — scores repos against issue text so routing
+// labels become optional for the common case where the issue naturally
+// references one codebase by name.
+// ---------------------------------------------------------------------------
+
+function tokenizeForRouting(text: string): Set<string> {
+  return new Set(
+    text
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, " ")
+      .split(/\s+/)
+      .filter((word) => word.length > 2),
+  );
+}
+
+function scoreRepoAgainstIssue(mapping: LinearProjectMapping, issueTokens: Set<string>): number {
+  let score = 0;
+
+  // Route key / aliases — strong signal (e.g., issue says "frontend" and routeKey is "frontend")
+  const routeKey = defaultRouteKey(mapping).toLowerCase();
+  if (issueTokens.has(routeKey)) {
+    score += 10;
+  }
+  for (const alias of mapping.routeAliases ?? []) {
+    if (issueTokens.has(alias.toLowerCase())) {
+      score += 10;
+    }
+  }
+
+  // Workspace root directory name — medium signal
+  const dirName = nodeBasename(mapping.workspaceRoot).toLowerCase();
+  if (dirName.length > 2 && issueTokens.has(dirName)) {
+    score += 5;
+  }
+  // Also check hyphenated parts of directory name (e.g., "ai-code" → "code")
+  for (const part of dirName.split(/[-_.]/)) {
+    if (part.length > 2 && issueTokens.has(part)) {
+      score += 2;
+    }
+  }
+
+  // Routing labels — if configured labels appear in issue text, that's a match
+  for (const label of mapping.routingLabels ?? []) {
+    if (issueTokens.has(label.toLowerCase())) {
+      score += 8;
+    }
+  }
+
+  return score;
+}
+
+/**
+ * When deterministic routing is ambiguous (multiple repos or no label match),
+ * score each repo against the issue content and auto-resolve if one clearly
+ * wins. Returns null if scores are tied or all zero (genuine ambiguity).
+ */
+function inferRepoFromIssueContent(
+  mappings: ReadonlyArray<LinearProjectMapping>,
+  issueTitle: string,
+  issueDescription?: string,
+): LinearProjectMapping | null {
+  if (mappings.length <= 1) {
+    return mappings[0] ?? null;
+  }
+
+  const text = `${issueTitle} ${issueDescription ?? ""}`;
+  const tokens = tokenizeForRouting(text);
+  if (tokens.size === 0) {
+    return null;
+  }
+
+  const scored = mappings.map((mapping) => ({
+    mapping,
+    score: scoreRepoAgainstIssue(mapping, tokens),
+  }));
+
+  scored.sort((a, b) => b.score - a.score);
+  const best = scored[0];
+  const second = scored[1];
+
+  // Only auto-resolve when the best score is meaningfully higher than the runner-up.
+  if (best && best.score > 0 && (!second || best.score > second.score * 1.5)) {
+    return best.mapping;
+  }
+
+  return null;
+}
+
 function normalizeToken(value: string | undefined): string | null {
   const normalized = value?.trim().toLowerCase();
   return normalized && normalized.length > 0 ? normalized : null;
@@ -400,6 +489,7 @@ function buildSelectableMappings(input: {
 const resolveRepositoryRouting = (input: {
   readonly organizationId: string;
   readonly issueTeamKey: string;
+  readonly issueTitle: string;
   readonly labelNames: ReadonlyArray<string>;
   readonly projectKeys: ReadonlyArray<string>;
   readonly issueDescription?: string;
@@ -414,16 +504,30 @@ const resolveRepositoryRouting = (input: {
       if (firstResolvedTier.matches.length === 1) {
         const [mapping] = firstResolvedTier.matches;
         if (mapping) {
-          // Team-level routing is intentionally broad; when multiple repositories
-          // are configured we mirror Cyrus and ask the user instead of silently
-          // preferring the first team match over the default workspace.
           if (firstResolvedTier.tier === "team-key" && selectableMappings.length > 1) {
+            // Team-level match is broad — try content inference before asking user.
+            const inferred = inferRepoFromIssueContent(
+              selectableMappings,
+              input.issueTitle,
+              input.issueDescription,
+            );
+            if (inferred) {
+              return { type: "resolved", mapping: inferred };
+            }
             return { type: "selection", mappings: selectableMappings };
           }
           return { type: "resolved", mapping };
         }
       }
-      // Cyrus asks the user to choose when multiple configured repositories remain viable.
+      // Multiple label/project matches — try content inference first.
+      const inferred = inferRepoFromIssueContent(
+        firstResolvedTier.matches,
+        input.issueTitle,
+        input.issueDescription,
+      );
+      if (inferred) {
+        return { type: "resolved", mapping: inferred };
+      }
       return { type: "selection", mappings: selectableMappings };
     }
 
@@ -434,8 +538,15 @@ const resolveRepositoryRouting = (input: {
       }
     }
 
-    // When multiple repositories are available we prefer Cyrus-style repo
-    // elicitation over silently picking the fallback workspace.
+    // No deterministic match — try content-based inference before asking.
+    const inferred = inferRepoFromIssueContent(
+      selectableMappings,
+      input.issueTitle,
+      input.issueDescription,
+    );
+    if (inferred) {
+      return { type: "resolved", mapping: inferred };
+    }
     return { type: "selection", mappings: selectableMappings };
   }
 
@@ -782,6 +893,7 @@ const makeLinearWebhookHandler = Effect.gen(function* () {
     function* (input: {
       readonly organizationId: string;
       readonly issueTeamKey: string;
+      readonly issueTitle: string;
       readonly labelNames: ReadonlyArray<string>;
       readonly projectKeys: ReadonlyArray<string>;
       readonly issueDescription?: string;
@@ -1243,6 +1355,7 @@ const makeLinearWebhookHandler = Effect.gen(function* () {
     const routingResolution = yield* resolveMappingWithDiagnostics({
       organizationId: webhook.organizationId,
       issueTeamKey: fetchedIssue.teamKey,
+      issueTitle: fetchedIssue.title,
       labelNames: fetchedIssue.labelNames,
       projectKeys: fetchedIssue.projectKeys,
       issueDescription: fetchedIssue.description,
