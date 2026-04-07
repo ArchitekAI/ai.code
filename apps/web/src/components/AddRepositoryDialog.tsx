@@ -24,7 +24,6 @@ interface AddRepositoryDialogProps {
 export function AddRepositoryDialog({ open, onOpenChange, onSuccess }: AddRepositoryDialogProps) {
   const [url, setUrl] = useState("");
   const [baseBranch, setBaseBranch] = useState("");
-  const [teamKey, setTeamKey] = useState("");
   const [routingLabelsInput, setRoutingLabelsInput] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -33,7 +32,6 @@ export function AddRepositoryDialog({ open, onOpenChange, onSuccess }: AddReposi
   const resetForm = useCallback(() => {
     setUrl("");
     setBaseBranch("");
-    setTeamKey("");
     setRoutingLabelsInput("");
     setValidationError(null);
   }, []);
@@ -57,7 +55,6 @@ export function AddRepositoryDialog({ open, onOpenChange, onSuccess }: AddReposi
         const result = await api.projects.add({
           repositoryUrl: trimmedUrl,
           ...(baseBranch.trim() ? { baseBranch: baseBranch.trim() } : {}),
-          ...(teamKey.trim() ? { teamKey: teamKey.trim() } : {}),
           ...(labels.length > 0 ? { routingLabels: labels } : {}),
         });
         onOpenChange(false);
@@ -75,7 +72,7 @@ export function AddRepositoryDialog({ open, onOpenChange, onSuccess }: AddReposi
         setIsSubmitting(false);
       }
     },
-    [baseBranch, onOpenChange, onSuccess, routingLabelsInput, teamKey, url],
+    [baseBranch, onOpenChange, onSuccess, routingLabelsInput, url],
   );
 
   return (
@@ -94,7 +91,8 @@ export function AddRepositoryDialog({ open, onOpenChange, onSuccess }: AddReposi
         <DialogHeader>
           <DialogTitle>Add Git Repository</DialogTitle>
           <DialogDescription>
-            Clone a Git repository and configure its Linear integration mapping.
+            The repo will be cloned and configured for Linear issue routing. When an issue with the
+            matching label is assigned to the agent, it will work in this repo.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
@@ -127,19 +125,6 @@ export function AddRepositoryDialog({ open, onOpenChange, onSuccess }: AddReposi
               </p>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="repo-team-key">Team Key</Label>
-              <Input
-                id="repo-team-key"
-                placeholder="AFF"
-                value={teamKey}
-                onChange={(event) => setTeamKey(event.target.value)}
-                spellCheck={false}
-              />
-              <p className="text-xs text-muted-foreground">
-                Linear team key for issue routing (e.g. AFF, ENG).
-              </p>
-            </div>
-            <div className="space-y-1.5">
               <Label htmlFor="repo-routing-labels">Routing Labels</Label>
               <Input
                 id="repo-routing-labels"
@@ -149,7 +134,8 @@ export function AddRepositoryDialog({ open, onOpenChange, onSuccess }: AddReposi
                 spellCheck={false}
               />
               <p className="text-xs text-muted-foreground">
-                Comma-separated labels for Linear issue routing.
+                Comma-separated. Issues with these labels will be routed to this repo. Defaults to
+                the repo name if left empty.
               </p>
             </div>
             {validationError ? <p className="text-sm text-destructive">{validationError}</p> : null}
