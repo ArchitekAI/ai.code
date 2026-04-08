@@ -45,15 +45,13 @@ const buildLinearMcpConfig = (input: {
           url: `http://127.0.0.1:${input.port}/mcp/t3-tools`,
           headers: {
             "x-t3-mcp-context-id": input.contextId,
-            ...(input.authToken ? { Authorization: `Bearer ${input.authToken}` } : {}),
+            ...(input.authToken ? { Authorization: `Bearer ${input.authToken}` } : undefined),
           },
         },
         "t3-docs": {
           type: "http",
           url: `http://127.0.0.1:${input.port}/mcp/t3-docs`,
-          headers: {
-            ...(input.authToken ? { Authorization: `Bearer ${input.authToken}` } : {}),
-          },
+          headers: input.authToken ? { Authorization: `Bearer ${input.authToken}` } : {},
         },
       },
     },

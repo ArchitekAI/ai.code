@@ -369,3 +369,7 @@ For each entry, capture:
 - Files:
   - `packages/contracts/src/linear.ts`
 - Notes: This keeps the webhook contract aligned with observed Linear payloads and the Cyrus-style "best effort prompt recovery" behavior.
+
+# 2026-04-08
+
+- Claude-on-Bedrock sessions now translate the fork's stored Claude model slugs to deployment-provided Bedrock model IDs when `CLAUDE_CODE_USE_BEDROCK` is enabled, so Linear-triggered Claude sessions use the correct Bedrock identifiers instead of the plain Anthropic slugs.

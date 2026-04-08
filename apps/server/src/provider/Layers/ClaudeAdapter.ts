@@ -2716,7 +2716,9 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const modelSelection =
         input.modelSelection?.provider === "claudeAgent" ? input.modelSelection : undefined;
       const caps = getClaudeModelCapabilities(modelSelection?.model);
-      const apiModelId = modelSelection ? resolveApiModelId(modelSelection) : undefined;
+      const apiModelId = modelSelection
+        ? resolveApiModelId(modelSelection, process.env)
+        : undefined;
       const effort = (resolveEffort(caps, modelSelection?.options?.effort) ??
         null) as ClaudeCodeEffort | null;
       const fastMode = modelSelection?.options?.fastMode === true && caps.supportsFastMode;
@@ -2895,7 +2897,7 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
 
     if (modelSelection?.model) {
-      const apiModelId = resolveApiModelId(modelSelection);
+      const apiModelId = resolveApiModelId(modelSelection, process.env);
       if (context.currentApiModelId !== apiModelId) {
         yield* Effect.tryPromise({
           try: () => context.query.setModel(apiModelId),

@@ -44,10 +44,7 @@ import {
   type LinearPromptAssemblerCommentContext,
   type LinearPromptAssemblerGuidanceRule,
 } from "../Services/LinearPromptAssembler.ts";
-import {
-  LinearSessionRegistry,
-  type LinearSessionRegistryError,
-} from "../Services/LinearSessionRegistry.ts";
+import { LinearSessionRegistry } from "../Services/LinearSessionRegistry.ts";
 import { ThreadRelationshipRegistry } from "../../mcp/Services/ThreadRelationshipRegistry.ts";
 import {
   LinearWebhookHandler,
@@ -1176,6 +1173,7 @@ const makeLinearWebhookHandler = Effect.gen(function* () {
     // Mirror Cyrus: move the issue to "In Progress" when the agent starts working.
     // Fire-and-forget — don't block session startup on the state transition.
     yield* moveIssueToInProgress({
+      linearClient,
       issueId: input.issue.id,
       issueIdentifier: input.issue.identifier,
       teamId: input.issue.teamId,

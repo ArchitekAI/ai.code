@@ -17,8 +17,9 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProjectOnboarding, type ProjectOnboardingShape } from "../Services/ProjectOnboarding.ts";
 
 const DEFAULT_PROJECT_MODEL_SELECTION = {
-  provider: "codex" as const,
-  model: "gpt-5-codex" as const,
+  provider: "claudeAgent" as const,
+  model: "claude-opus-4-6" as const,
+  options: { contextWindow: "1m" } as const,
 };
 
 function normalizeStringList(values: ReadonlyArray<string> | undefined): Array<string> | undefined {
@@ -158,8 +159,9 @@ const makeProjectOnboarding = Effect.gen(function* () {
           projectCreated: false,
           title: existingProject.value.title,
           workspaceRoot,
-          defaultModelSelection:
-            existingProject.value.defaultModelSelection ?? DEFAULT_PROJECT_MODEL_SELECTION,
+          // Always use the current server-side default so existing projects
+          // pick up provider changes (e.g. Codex → Claude) without manual migration.
+          defaultModelSelection: DEFAULT_PROJECT_MODEL_SELECTION,
         };
       }
 

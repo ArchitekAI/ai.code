@@ -541,6 +541,7 @@ const make = Effect.gen(function* () {
         // When the agent already created the PR, move issue to "In Review".
         if (gitStatus.pr) {
           yield* moveIssueToReviewState({
+            linearClient,
             issueId: latestLinearSession.session.issueId,
             issueIdentifier: latestLinearSession.session.issueIdentifier,
             teamId: yield* resolveTeamIdForIssue(latestLinearSession.session.issueId),
@@ -635,6 +636,7 @@ const make = Effect.gen(function* () {
         actionResult.pr.status === "created" || actionResult.pr.status === "opened_existing";
       if (prWasCreatedOrOpened) {
         yield* moveIssueToReviewState({
+          linearClient,
           issueId: latestLinearSession.session.issueId,
           issueIdentifier: latestLinearSession.session.issueIdentifier,
           teamId: yield* resolveTeamIdForIssue(latestLinearSession.session.issueId),
@@ -645,8 +647,9 @@ const make = Effect.gen(function* () {
       // completion response so it doesn't block the terminal response.
       const prNumber = actionResult.pr.number;
       if (prNumber && prWasCreatedOrOpened) {
-        // Fire-and-forget: don't await, don't block the response.
-        void Effect.runPromise(
+        // Run preview discovery in a scoped fiber so completion stays fast
+        // without escaping the current Effect runtime.
+        yield* Effect.forkScoped(
           fetchVercelPreviewUrl({ cwd, prNumber }).pipe(
             Effect.flatMap((previewUrl) => {
               if (!previewUrl) {
@@ -662,9 +665,8 @@ const make = Effect.gen(function* () {
                 ephemeral: false,
               });
             }),
-            Effect.catch(() => Effect.void),
           ),
-        ).catch(() => {});
+        );
       }
 
       // Cyrus treats terminal narration as a session concern. We mirror that here

@@ -17,7 +17,7 @@
  */
 import { Effect } from "effect";
 
-import { LinearClient, type LinearWorkflowState } from "../Services/LinearClient.ts";
+import type { LinearClientShape, LinearWorkflowState } from "../Services/LinearClient.ts";
 
 /**
  * Find the lowest-position "started" state for a team (typically "In Progress").
@@ -56,15 +56,16 @@ function findHighestStartedState(
  * logs a warning instead of failing the caller's flow.
  */
 export const moveIssueToInProgress = (input: {
+  readonly linearClient: LinearClientShape;
   readonly issueId: string;
   readonly issueIdentifier: string;
   readonly teamId: string;
   readonly currentState?: string;
 }) =>
   Effect.gen(function* () {
-    const linearClient = yield* LinearClient;
-
-    const states = yield* linearClient.fetchTeamWorkflowStates(input.teamId);
+    // Accept the client from callers so this helper does not leak a hidden
+    // LinearClient requirement back into webhook and reactor effects.
+    const states = yield* input.linearClient.fetchTeamWorkflowStates(input.teamId);
     const targetState = findLowestStartedState(states);
     if (!targetState) {
       yield* Effect.logWarning("no started workflow state found for team", {
@@ -88,7 +89,7 @@ export const moveIssueToInProgress = (input: {
       }
     }
 
-    yield* linearClient.updateIssueState(input.issueId, targetState.id);
+    yield* input.linearClient.updateIssueState(input.issueId, targetState.id);
     yield* Effect.logDebug("moved issue to started state", {
       issueIdentifier: input.issueIdentifier,
       targetState: targetState.name,
@@ -113,14 +114,15 @@ export const moveIssueToInProgress = (input: {
  * logs a warning instead of failing the caller's flow.
  */
 export const moveIssueToReviewState = (input: {
+  readonly linearClient: LinearClientShape;
   readonly issueId: string;
   readonly issueIdentifier: string;
   readonly teamId: string;
 }) =>
   Effect.gen(function* () {
-    const linearClient = yield* LinearClient;
-
-    const states = yield* linearClient.fetchTeamWorkflowStates(input.teamId);
+    // Keep the helper environment-free so post-PR transitions can run from
+    // background fibers without depending on a service lookup.
+    const states = yield* input.linearClient.fetchTeamWorkflowStates(input.teamId);
     const lowestStarted = findLowestStartedState(states);
     const highestStarted = findHighestStartedState(states);
 
@@ -138,7 +140,7 @@ export const moveIssueToReviewState = (input: {
       return;
     }
 
-    yield* linearClient.updateIssueState(input.issueId, highestStarted.id);
+    yield* input.linearClient.updateIssueState(input.issueId, highestStarted.id);
     yield* Effect.logDebug("moved issue to review state", {
       issueIdentifier: input.issueIdentifier,
       targetState: highestStarted.name,

@@ -14,6 +14,14 @@ export interface SelectableModelOption {
   name: string;
 }
 
+type RuntimeEnv = Readonly<Record<string, string | undefined>>;
+
+const CLAUDE_BEDROCK_MODEL_ENV_BY_SLUG: Partial<Record<string, string>> = {
+  "claude-opus-4-6": "ANTHROPIC_DEFAULT_OPUS_MODEL",
+  "claude-sonnet-4-6": "ANTHROPIC_DEFAULT_SONNET_MODEL",
+  "claude-haiku-4-5": "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+};
+
 // ── Effort helpers ────────────────────────────────────────────────────
 
 /** Check whether a capabilities object includes a given effort value. */
@@ -196,6 +204,41 @@ export function trimOrNull<T extends string>(value: T | null | undefined): T | n
   return trimmed || null;
 }
 
+function isBedrockEnabled(env: RuntimeEnv | undefined): boolean {
+  const value = trimOrNull(env?.CLAUDE_CODE_USE_BEDROCK);
+  return value === "1" || value?.toLowerCase() === "true";
+}
+
+function isClaudeBedrockModelId(model: string): boolean {
+  return (
+    model.startsWith("anthropic.") ||
+    model.startsWith("us.anthropic.") ||
+    model.startsWith("arn:aws:bedrock:")
+  );
+}
+
+function resolveClaudeBedrockModelId(
+  modelSelection: Extract<ModelSelection, { provider: "claudeAgent" }>,
+  env: RuntimeEnv | undefined,
+): string | null {
+  if (!isBedrockEnabled(env)) {
+    return null;
+  }
+
+  if (isClaudeBedrockModelId(modelSelection.model)) {
+    return modelSelection.model;
+  }
+
+  const configuredEnvKey = CLAUDE_BEDROCK_MODEL_ENV_BY_SLUG[modelSelection.model];
+  if (!configuredEnvKey) {
+    return null;
+  }
+
+  // Bedrock model IDs are deployment-specific, so we prefer explicit env
+  // overrides over hardcoding versioned IDs in the shared model layer.
+  return trimOrNull(env?.[configuredEnvKey]);
+}
+
 /**
  * Resolve the actual API model identifier from a model selection.
  *
@@ -207,9 +250,13 @@ export function trimOrNull<T extends string>(value: T | null | undefined): T | n
  * Expects `contextWindow` to already be resolved (via `resolveContextWindow`)
  * to the effective value, not stripped to `undefined` for defaults.
  */
-export function resolveApiModelId(modelSelection: ModelSelection): string {
+export function resolveApiModelId(modelSelection: ModelSelection, env?: RuntimeEnv): string {
   switch (modelSelection.provider) {
     case "claudeAgent": {
+      const bedrockModelId = resolveClaudeBedrockModelId(modelSelection, env);
+      if (bedrockModelId) {
+        return bedrockModelId;
+      }
       switch (modelSelection.options?.contextWindow) {
         case "1m":
           return `${modelSelection.model}[1m]`;
