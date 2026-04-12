@@ -45,11 +45,19 @@ This phase proves that the repo can host the orchestrator app and that Linear in
 
 ### Acceptance criteria
 
-- [ ] `apps/orchestrator` is a first-class workspace in the monorepo and participates in build/typecheck tasks.
-- [ ] Convex app entrypoints exist under `apps/orchestrator/convex/` and can boot locally.
-- [ ] A Linear webhook can create or update a canonical control-thread record in Convex.
-- [ ] The vendored Chat SDK state adapter is present and supports the minimum lock, subscription, and KV behavior needed by the bot runtime.
-- [ ] No T3 worker interaction is required for the happy path in this phase.
+- [x] `apps/orchestrator` is a first-class workspace in the monorepo and participates in build/typecheck tasks.
+- [x] Convex app entrypoints exist under `apps/orchestrator/convex/` and can boot locally.
+- [x] A Linear webhook can create or update a canonical control-thread record in Convex.
+- [x] The vendored Chat SDK state adapter is present and supports the minimum lock, subscription, and KV behavior needed by the bot runtime.
+- [x] No T3 worker interaction is required for the happy path in this phase.
+
+### Implementation notes
+
+- Added `apps/orchestrator` as a standalone workspace with Convex config, schema, HTTP ingress, and source/tests for the control-plane skeleton.
+- Generated Convex `_generated/*` files via `npx convex dev` so the new app is using the real Convex codegen instead of a hand-written shim.
+- Implemented a local `StateAdapter` for Chat SDK instead of `convex-chat-sdk`, which keeps the phase-1 runtime self-contained while still matching Chat SDK's actual interface.
+- Wired Linear ingress to normalize payloads into durable Convex `controlThreads`, `controlThreadEvents`, and `controlThreadMessages` records.
+- Kept T3 worker execution and the richer Linear lifecycle bridge out of scope for this phase, exactly as planned.
 
 ---
 
