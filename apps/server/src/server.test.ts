@@ -22,7 +22,17 @@ import {
 } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import { assertFailure, assertInclude, assertTrue } from "@effect/vitest/utils";
-import { Effect, FileSystem, Layer, ManagedRuntime, Path, Stream } from "effect";
+import {
+  Deferred,
+  Duration,
+  Effect,
+  FileSystem,
+  Layer,
+  ManagedRuntime,
+  Option,
+  Path,
+  Stream,
+} from "effect";
 import {
   FetchHttpClient,
   HttpBody,
@@ -44,6 +54,7 @@ import {
 } from "./checkpointing/Services/CheckpointDiffQuery.ts";
 import { GitCore, type GitCoreShape } from "./git/Services/GitCore.ts";
 import { GitManager, type GitManagerShape } from "./git/Services/GitManager.ts";
+import { GitStatusBroadcasterLive } from "./git/Layers/GitStatusBroadcaster.ts";
 import { Keybindings, type KeybindingsShape } from "./keybindings.ts";
 import { Open, type OpenShape } from "./open.ts";
 import {
@@ -52,10 +63,37 @@ import {
 } from "./orchestration/Services/OrchestrationEngine.ts";
 import { OrchestrationListenerCallbackError } from "./orchestration/Errors.ts";
 import {
+  BootstrapTurnService,
+  type BootstrapTurnServiceShape,
+} from "./orchestration/Services/BootstrapTurnService.ts";
+import { BootstrapTurnServiceLive } from "./orchestration/Layers/BootstrapTurnService.ts";
+import {
   ProjectionSnapshotQuery,
   type ProjectionSnapshotQueryShape,
 } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
+import {
+  LinearWebhookHandler,
+  type LinearWebhookHandlerShape,
+} from "./linear/Services/LinearWebhookHandler.ts";
+import { LinearOAuth, type LinearOAuthShape } from "./linear/Services/LinearOAuth.ts";
+import { LinearClient, type LinearClientShape } from "./linear/Services/LinearClient.ts";
+import {
+  LinearSessionRegistry,
+  type LinearSessionRegistryShape,
+} from "./linear/Services/LinearSessionRegistry.ts";
+import {
+  ProjectOnboarding,
+  type ProjectOnboardingShape,
+} from "./project/Services/ProjectOnboarding.ts";
+import {
+  McpContextRegistry,
+  type McpContextRegistryShape,
+} from "./mcp/Services/McpContextRegistry.ts";
+import {
+  ThreadRelationshipRegistry,
+  type ThreadRelationshipRegistryShape,
+} from "./mcp/Services/ThreadRelationshipRegistry.ts";
 import {
   ProviderRegistry,
   type ProviderRegistryShape,
@@ -255,9 +293,17 @@ const buildAppUnderTest = (options?: {
     projectSetupScriptRunner?: Partial<ProjectSetupScriptRunnerShape>;
     terminalManager?: Partial<TerminalManagerShape>;
     orchestrationEngine?: Partial<OrchestrationEngineShape>;
+    bootstrapTurnService?: Partial<BootstrapTurnServiceShape>;
     projectionSnapshotQuery?: Partial<ProjectionSnapshotQueryShape>;
     checkpointDiffQuery?: Partial<CheckpointDiffQueryShape>;
     browserTraceCollector?: Partial<BrowserTraceCollectorShape>;
+    linearWebhookHandler?: Partial<LinearWebhookHandlerShape>;
+    linearOAuth?: Partial<LinearOAuthShape>;
+    linearClient?: Partial<LinearClientShape>;
+    linearSessionRegistry?: Partial<LinearSessionRegistryShape>;
+    projectOnboarding?: Partial<ProjectOnboardingShape>;
+    mcpContextRegistry?: Partial<McpContextRegistryShape>;
+    threadRelationshipRegistry?: Partial<ThreadRelationshipRegistryShape>;
     serverLifecycleEvents?: Partial<ServerLifecycleEventsShape>;
     serverRuntimeStartup?: Partial<ServerRuntimeStartupShape>;
   };
@@ -291,123 +337,217 @@ const buildAppUnderTest = (options?: {
       authToken: undefined,
       autoBootstrapProjectFromCwd: false,
       logWebSocketEvents: false,
+      linearSettingsOverrides: undefined,
       ...options?.config,
     };
     const layerConfig = Layer.succeed(ServerConfig, config);
+    const serverSettingsLayer = Layer.mock(ServerSettingsService)({
+      start: Effect.void,
+      ready: Effect.void,
+      getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
+      updateSettings: () => Effect.succeed(DEFAULT_SERVER_SETTINGS),
+      applyRuntimeOverrides: () => Effect.succeed(DEFAULT_SERVER_SETTINGS),
+      streamChanges: Stream.empty,
+      ...options?.layers?.serverSettings,
+    });
+    const gitCoreLayer = Layer.mock(GitCore)({
+      ...options?.layers?.gitCore,
+    });
+    const projectSetupScriptRunnerLayer = Layer.mock(ProjectSetupScriptRunner)({
+      runForThread: () => Effect.succeed({ status: "no-script" as const }),
+      ...options?.layers?.projectSetupScriptRunner,
+    });
+    const orchestrationEngineLayer = Layer.mock(OrchestrationEngineService)({
+      getReadModel: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
+      readEvents: () => Stream.empty,
+      dispatch: () => Effect.succeed({ sequence: 0 }),
+      streamDomainEvents: Stream.empty,
+      ...options?.layers?.orchestrationEngine,
+    });
+    const mcpContextRegistryLayer = Layer.mock(McpContextRegistry)({
+      register: () => Effect.void,
+      lookup: () => Effect.succeed(Option.none()),
+      remove: () => Effect.void,
+      ...options?.layers?.mcpContextRegistry,
+    });
+    const bootstrapTurnServiceLayer = options?.layers?.bootstrapTurnService
+      ? Layer.mock(BootstrapTurnService)({
+          ...options.layers.bootstrapTurnService,
+        })
+      : BootstrapTurnServiceLive.pipe(
+          Layer.provide(orchestrationEngineLayer),
+          Layer.provide(gitCoreLayer),
+          Layer.provide(projectSetupScriptRunnerLayer),
+          Layer.provide(serverSettingsLayer),
+          Layer.provide(mcpContextRegistryLayer),
+          Layer.provide(layerConfig),
+        );
+
+    const keybindingsLayer = Layer.mock(Keybindings)({
+      streamChanges: Stream.empty,
+      ...options?.layers?.keybindings,
+    });
+    const providerRegistryLayer = Layer.mock(ProviderRegistry)({
+      getProviders: Effect.succeed([]),
+      refresh: () => Effect.succeed([]),
+      streamChanges: Stream.empty,
+      ...options?.layers?.providerRegistry,
+    });
+    const openLayer = Layer.mock(Open)({
+      ...options?.layers?.open,
+    });
+    const gitManagerLayer = Layer.mock(GitManager)({
+      ...options?.layers?.gitManager,
+    });
+    const gitStatusBroadcasterLayer = GitStatusBroadcasterLive.pipe(Layer.provide(gitManagerLayer));
+    const terminalManagerLayer = Layer.mock(TerminalManager)({
+      ...options?.layers?.terminalManager,
+    });
+    const projectionSnapshotQueryLayer = Layer.mock(ProjectionSnapshotQuery)({
+      getSnapshot: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
+      ...options?.layers?.projectionSnapshotQuery,
+    });
+    const checkpointDiffQueryLayer = Layer.mock(CheckpointDiffQuery)({
+      getTurnDiff: () =>
+        Effect.succeed({
+          threadId: defaultThreadId,
+          fromTurnCount: 0,
+          toTurnCount: 0,
+          diff: "",
+        }),
+      getFullThreadDiff: () =>
+        Effect.succeed({
+          threadId: defaultThreadId,
+          fromTurnCount: 0,
+          toTurnCount: 0,
+          diff: "",
+        }),
+      ...options?.layers?.checkpointDiffQuery,
+    });
+    const browserTraceCollectorLayer = Layer.mock(BrowserTraceCollector)({
+      record: () => Effect.void,
+      ...options?.layers?.browserTraceCollector,
+    });
+    const linearWebhookHandlerLayer = Layer.mock(LinearWebhookHandler)({
+      handleWebhook: () => Effect.void,
+      ...options?.layers?.linearWebhookHandler,
+    });
+    const linearOAuthLayer = Layer.mock(LinearOAuth)({
+      buildAuthorizationUrl: Effect.succeed({ url: "https://linear.app/oauth/authorize" }),
+      completeAuthorizationCodeFlow: () => Effect.die("unused"),
+      getAccessToken: Effect.succeed(null),
+      refreshWorkspaceToken: () => Effect.die("unused"),
+      ...options?.layers?.linearOAuth,
+    });
+    const linearClientLayer = Layer.mock(LinearClient)({
+      createAgentActivity: () => Effect.succeed({ activityId: "activity-1" }),
+      fetchIssue: () => Effect.die("unused"),
+      fetchIssueComments: () => Effect.succeed([]),
+      fetchIssueState: () => Effect.die("unused"),
+      uploadFile: () => Effect.die("unused"),
+      createAgentSessionOnIssue: () => Effect.die("unused"),
+      createAgentSessionOnComment: () => Effect.die("unused"),
+      listAgentSessions: () => Effect.succeed([]),
+      getAgentSession: () => Effect.die("unused"),
+      createIssueRelation: () => Effect.void,
+      listChildIssues: () => Effect.succeed([]),
+      fetchTeamWorkflowStates: () => Effect.succeed([]),
+      updateIssueState: () => Effect.void,
+      ...options?.layers?.linearClient,
+    });
+    const linearSessionRegistryLayer = Layer.mock(LinearSessionRegistry)({
+      register: () => Effect.void,
+      lookupBySessionId: () => Effect.succeed(Option.none()),
+      listByThreadId: () => Effect.succeed([]),
+      listByIssueId: () => Effect.succeed([]),
+      remove: () => Effect.void,
+      removeByIssueId: () => Effect.void,
+      ...options?.layers?.linearSessionRegistry,
+    });
+    const projectOnboardingLayer = Layer.mock(ProjectOnboarding)({
+      addRepository: () =>
+        Effect.succeed({
+          projectId: defaultProjectId,
+          title: "Default Project",
+          workspaceRoot: "/tmp/default-project",
+          baseBranch: "main",
+          cloned: false,
+          mappingAdded: false,
+          projectCreated: false,
+        }),
+      ensureProjectForWorkspaceRoot: (workspaceRoot) =>
+        Effect.succeed({
+          projectId: defaultProjectId,
+          projectCreated: false,
+          title: "Default Project",
+          workspaceRoot,
+          defaultModelSelection,
+        }),
+      ...options?.layers?.projectOnboarding,
+    });
+    const threadRelationshipRegistryLayer = Layer.mock(ThreadRelationshipRegistry)({
+      registerFromMcp: () => Effect.void,
+      attachChildThread: () => Effect.void,
+      listChildren: () => Effect.succeed([]),
+      findParent: () => Effect.succeed(Option.none()),
+      findParentByLinearSession: () => Effect.succeed(Option.none()),
+      markResumed: () => Effect.succeed(true),
+      updateChildWorktree: () => Effect.void,
+      remove: () => Effect.void,
+      ...options?.layers?.threadRelationshipRegistry,
+    });
+    const serverLifecycleEventsLayer = Layer.mock(ServerLifecycleEvents)({
+      publish: (event) => Effect.succeed({ ...(event as any), sequence: 1 }),
+      snapshot: Effect.succeed({ sequence: 0, events: [] }),
+      stream: Stream.empty,
+      ...options?.layers?.serverLifecycleEvents,
+    });
+    const serverRuntimeStartupLayer = Layer.mock(ServerRuntimeStartup)({
+      awaitCommandReady: Effect.void,
+      markHttpListening: Effect.void,
+      enqueueCommand: (effect) => effect,
+      ...options?.layers?.serverRuntimeStartup,
+    });
+
+    const testRuntimeSupportLayer = Layer.mergeAll(
+      layerConfig,
+      serverSettingsLayer,
+      gitCoreLayer,
+      projectSetupScriptRunnerLayer,
+      orchestrationEngineLayer,
+      mcpContextRegistryLayer,
+      workspaceAndProjectServicesLayer,
+      bootstrapTurnServiceLayer,
+    );
+
+    const testMockServicesLayer = Layer.mergeAll(
+      // Group mocks so the test harness mirrors production without blowing Layer overload limits.
+      keybindingsLayer,
+      providerRegistryLayer,
+      openLayer,
+      gitManagerLayer,
+      terminalManagerLayer,
+      projectionSnapshotQueryLayer,
+      checkpointDiffQueryLayer,
+      browserTraceCollectorLayer,
+      linearWebhookHandlerLayer,
+      linearOAuthLayer,
+      linearClientLayer,
+      linearSessionRegistryLayer,
+      projectOnboardingLayer,
+      threadRelationshipRegistryLayer,
+      serverLifecycleEventsLayer,
+      serverRuntimeStartupLayer,
+    );
 
     const appLayer = HttpRouter.serve(makeRoutesLayer, {
       disableListenLog: true,
       disableLogger: true,
     }).pipe(
-      Layer.provide(
-        Layer.mock(Keybindings)({
-          streamChanges: Stream.empty,
-          ...options?.layers?.keybindings,
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(ProviderRegistry)({
-          getProviders: Effect.succeed([]),
-          refresh: () => Effect.succeed([]),
-          streamChanges: Stream.empty,
-          ...options?.layers?.providerRegistry,
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(ServerSettingsService)({
-          start: Effect.void,
-          ready: Effect.void,
-          getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
-          updateSettings: () => Effect.succeed(DEFAULT_SERVER_SETTINGS),
-          streamChanges: Stream.empty,
-          ...options?.layers?.serverSettings,
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(Open)({
-          ...options?.layers?.open,
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(GitCore)({
-          ...options?.layers?.gitCore,
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(GitManager)({
-          ...options?.layers?.gitManager,
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(ProjectSetupScriptRunner)({
-          runForThread: () => Effect.succeed({ status: "no-script" as const }),
-          ...options?.layers?.projectSetupScriptRunner,
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(TerminalManager)({
-          ...options?.layers?.terminalManager,
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(OrchestrationEngineService)({
-          getReadModel: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
-          readEvents: () => Stream.empty,
-          dispatch: () => Effect.succeed({ sequence: 0 }),
-          streamDomainEvents: Stream.empty,
-          ...options?.layers?.orchestrationEngine,
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(ProjectionSnapshotQuery)({
-          getSnapshot: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
-          ...options?.layers?.projectionSnapshotQuery,
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(CheckpointDiffQuery)({
-          getTurnDiff: () =>
-            Effect.succeed({
-              threadId: defaultThreadId,
-              fromTurnCount: 0,
-              toTurnCount: 0,
-              diff: "",
-            }),
-          getFullThreadDiff: () =>
-            Effect.succeed({
-              threadId: defaultThreadId,
-              fromTurnCount: 0,
-              toTurnCount: 0,
-              diff: "",
-            }),
-          ...options?.layers?.checkpointDiffQuery,
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(BrowserTraceCollector)({
-          record: () => Effect.void,
-          ...options?.layers?.browserTraceCollector,
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(ServerLifecycleEvents)({
-          publish: (event) => Effect.succeed({ ...(event as any), sequence: 1 }),
-          snapshot: Effect.succeed({ sequence: 0, events: [] }),
-          stream: Stream.empty,
-          ...options?.layers?.serverLifecycleEvents,
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(ServerRuntimeStartup)({
-          awaitCommandReady: Effect.void,
-          markHttpListening: Effect.void,
-          enqueueCommand: (effect) => effect,
-          ...options?.layers?.serverRuntimeStartup,
-        }),
-      ),
-      Layer.provide(workspaceAndProjectServicesLayer),
+      Layer.provide(testMockServicesLayer),
+      Layer.provide(testRuntimeSupportLayer),
+      Layer.provideMerge(gitStatusBroadcasterLayer),
       Layer.provideMerge(FetchHttpClient.layer),
-      Layer.provide(layerConfig),
     );
 
     yield* Layer.build(appLayer);
@@ -457,6 +597,64 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const response = yield* HttpClient.get("/");
       assert.equal(response.status, 200);
       assert.include(yield* response.text, "router-static-ok");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("redirects /oauth/authorize through the Linear OAuth service", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({
+        layers: {
+          linearOAuth: {
+            buildAuthorizationUrl: Effect.succeed({
+              url: "https://linear.app/oauth/authorize?client_id=test-client",
+            }),
+          },
+        },
+      });
+
+      const url = yield* getHttpServerUrl("/oauth/authorize");
+      const response = yield* Effect.promise(() => fetch(url, { redirect: "manual" }));
+
+      assert.equal(response.status, 302);
+      assert.equal(
+        response.headers.get("location"),
+        "https://linear.app/oauth/authorize?client_id=test-client",
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("completes the Cyrus-style Linear callback route", () =>
+    Effect.gen(function* () {
+      const handledCodes: Array<string> = [];
+      yield* buildAppUnderTest({
+        layers: {
+          linearOAuth: {
+            completeAuthorizationCodeFlow: (code) => {
+              handledCodes.push(code);
+              return Effect.succeed({
+                workspace: {
+                  id: "workspace-1",
+                  name: "Acme",
+                  slug: "acme",
+                  accessToken: "lin_oauth_access",
+                  refreshToken: "lin_oauth_refresh",
+                  tokenType: "Bearer",
+                  scope: "write,app:assignable,app:mentionable",
+                  expiresAt: "2026-04-05T00:00:00.000Z",
+                  installedAt: "2026-04-05T00:00:00.000Z",
+                  updatedAt: "2026-04-05T00:00:00.000Z",
+                },
+              });
+            },
+          },
+        },
+      });
+
+      const response = yield* HttpClient.get("/callback?code=test-code");
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(handledCodes, ["test-code"]);
+      assert.include(yield* response.text, "Linear authorized successfully");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -538,6 +736,45 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const response = yield* HttpClient.get(`/attachments/${attachmentId}`);
       assert.equal(response.status, 200);
       assert.equal(yield* response.text, "attachment-ok");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("accepts Cyrus-compatible POST /webhook alias requests", () =>
+    Effect.gen(function* () {
+      const deliveries: Array<string> = [];
+      yield* buildAppUnderTest({
+        layers: {
+          serverSettings: {
+            getSettings: Effect.succeed({
+              ...DEFAULT_SERVER_SETTINGS,
+              linear: {
+                ...DEFAULT_SERVER_SETTINGS.linear,
+                enabled: true,
+              },
+            }),
+          },
+          linearWebhookHandler: {
+            handleWebhook: ({ rawBody }) => {
+              deliveries.push(new TextDecoder().decode(rawBody));
+              return Effect.void;
+            },
+          },
+        },
+      });
+
+      const url = yield* getHttpServerUrl("/webhook");
+      const response = yield* Effect.promise(() =>
+        fetch(url, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ ok: true }),
+        }),
+      );
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(deliveries, ['{"ok":true}']);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -1126,6 +1363,46 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("routes websocket rpc projects.add", () =>
+    Effect.gen(function* () {
+      let receivedRepositoryUrl: string | null = null;
+
+      yield* buildAppUnderTest({
+        layers: {
+          projectOnboarding: {
+            addRepository: (input) =>
+              Effect.sync(() => {
+                receivedRepositoryUrl = input.repositoryUrl;
+                return {
+                  projectId: ProjectId.makeUnsafe("project-added"),
+                  title: "ai.code",
+                  workspaceRoot: "/tmp/repos/ai.code",
+                  baseBranch: "main",
+                  cloned: true,
+                  mappingAdded: true,
+                  projectCreated: true,
+                };
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const response = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.projectsAdd]({
+            repositoryUrl: "https://github.com/ArchitekAI/ai.code.git",
+          }),
+        ),
+      );
+
+      assert.equal(receivedRepositoryUrl, "https://github.com/ArchitekAI/ai.code.git");
+      assert.equal(response.workspaceRoot, "/tmp/repos/ai.code");
+      assert.equal(response.baseBranch, "main");
+      assert.equal(response.projectCreated, true);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("routes websocket rpc projects.searchEntries errors", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();
@@ -1260,6 +1537,25 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       yield* buildAppUnderTest({
         layers: {
           gitManager: {
+            invalidateLocalStatus: () => Effect.void,
+            invalidateRemoteStatus: () => Effect.void,
+            invalidateStatus: () => Effect.void,
+            localStatus: () =>
+              Effect.succeed({
+                isRepo: true,
+                hasOriginRemote: true,
+                isDefaultBranch: true,
+                branch: "main",
+                hasWorkingTreeChanges: false,
+                workingTree: { files: [], insertions: 0, deletions: 0 },
+              }),
+            remoteStatus: () =>
+              Effect.succeed({
+                hasUpstream: true,
+                aheadCount: 0,
+                behindCount: 0,
+                pr: null,
+              }),
             status: () =>
               Effect.succeed({
                 isRepo: true,
@@ -1373,8 +1669,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 worktree: { path: "/tmp/wt", branch: "feature/demo" },
               }),
             removeWorktree: () => Effect.void,
-            createBranch: () => Effect.void,
-            checkoutBranch: () => Effect.void,
+            createBranch: (input) => Effect.succeed({ branch: input.branch }),
+            checkoutBranch: (input) => Effect.succeed({ branch: input.branch }),
             initRepo: () => Effect.void,
           },
         },
@@ -1382,15 +1678,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       const wsUrl = yield* getWsServerUrl("/ws");
 
-      const status = yield* Effect.scoped(
-        withWsRpcClient(wsUrl, (client) => client[WS_METHODS.gitStatus]({ cwd: "/tmp/repo" })),
-      );
-      assert.equal(status.branch, "main");
-
       const pull = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) => client[WS_METHODS.gitPull]({ cwd: "/tmp/repo" })),
       );
       assert.equal(pull.status, "pulled");
+
+      const refreshedStatus = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.gitRefreshStatus]({ cwd: "/tmp/repo" }),
+        ),
+      );
+      assert.equal(refreshedStatus.isRepo, true);
 
       const stackedEvents = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
@@ -1494,10 +1792,61 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         cwd: "/tmp/repo",
         detail: "upstream missing",
       });
+      let invalidationCalls = 0;
+      let statusCalls = 0;
       yield* buildAppUnderTest({
         layers: {
           gitCore: {
             pullCurrentBranch: () => Effect.fail(gitError),
+          },
+          gitManager: {
+            invalidateLocalStatus: () =>
+              Effect.sync(() => {
+                invalidationCalls += 1;
+              }),
+            invalidateRemoteStatus: () =>
+              Effect.sync(() => {
+                invalidationCalls += 1;
+              }),
+            invalidateStatus: () =>
+              Effect.sync(() => {
+                invalidationCalls += 1;
+              }),
+            localStatus: () =>
+              Effect.succeed({
+                isRepo: true,
+                hasOriginRemote: true,
+                isDefaultBranch: true,
+                branch: "main",
+                hasWorkingTreeChanges: true,
+                workingTree: { files: [], insertions: 0, deletions: 0 },
+              }),
+            remoteStatus: () =>
+              Effect.sync(() => {
+                statusCalls += 1;
+                return {
+                  hasUpstream: true,
+                  aheadCount: 0,
+                  behindCount: 0,
+                  pr: null,
+                };
+              }),
+            status: () =>
+              Effect.sync(() => {
+                statusCalls += 1;
+                return {
+                  isRepo: true,
+                  hasOriginRemote: true,
+                  isDefaultBranch: true,
+                  branch: "main",
+                  hasWorkingTreeChanges: true,
+                  workingTree: { files: [], insertions: 0, deletions: 0 },
+                  hasUpstream: true,
+                  aheadCount: 0,
+                  behindCount: 0,
+                  pr: null,
+                };
+              }),
           },
         },
       });
@@ -1510,7 +1859,287 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
 
       assertFailure(result, gitError);
+      assert.equal(invalidationCalls, 0);
+      assert.equal(statusCalls, 0);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("routes websocket rpc git.runStackedAction errors after refreshing git status", () =>
+    Effect.gen(function* () {
+      const gitError = new GitCommandError({
+        operation: "commit",
+        command: "git commit",
+        cwd: "/tmp/repo",
+        detail: "nothing to commit",
+      });
+      let invalidationCalls = 0;
+      let statusCalls = 0;
+      yield* buildAppUnderTest({
+        layers: {
+          gitManager: {
+            invalidateLocalStatus: () =>
+              Effect.sync(() => {
+                invalidationCalls += 1;
+              }),
+            invalidateRemoteStatus: () =>
+              Effect.sync(() => {
+                invalidationCalls += 1;
+              }),
+            invalidateStatus: () =>
+              Effect.sync(() => {
+                invalidationCalls += 1;
+              }),
+            localStatus: () =>
+              Effect.succeed({
+                isRepo: true,
+                hasOriginRemote: true,
+                isDefaultBranch: false,
+                branch: "feature/demo",
+                hasWorkingTreeChanges: true,
+                workingTree: { files: [], insertions: 0, deletions: 0 },
+              }),
+            remoteStatus: () =>
+              Effect.sync(() => {
+                statusCalls += 1;
+                return {
+                  hasUpstream: true,
+                  aheadCount: 0,
+                  behindCount: 0,
+                  pr: null,
+                };
+              }),
+            status: () =>
+              Effect.sync(() => {
+                statusCalls += 1;
+                return {
+                  isRepo: true,
+                  hasOriginRemote: true,
+                  isDefaultBranch: false,
+                  branch: "feature/demo",
+                  hasWorkingTreeChanges: true,
+                  workingTree: { files: [], insertions: 0, deletions: 0 },
+                  hasUpstream: true,
+                  aheadCount: 0,
+                  behindCount: 0,
+                  pr: null,
+                };
+              }),
+            runStackedAction: () => Effect.fail(gitError),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.gitRunStackedAction]({
+            actionId: "action-1",
+            cwd: "/tmp/repo",
+            action: "commit",
+          }).pipe(Stream.runCollect, Effect.result),
+        ),
+      );
+
+      assertFailure(result, gitError);
+      assert.equal(invalidationCalls, 0);
+      assert.equal(statusCalls, 0);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("completes websocket rpc git.pull before background git status refresh finishes", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({
+        layers: {
+          gitCore: {
+            pullCurrentBranch: () =>
+              Effect.succeed({
+                status: "pulled" as const,
+                branch: "main",
+                upstreamBranch: "origin/main",
+              }),
+          },
+          gitManager: {
+            invalidateLocalStatus: () => Effect.void,
+            invalidateRemoteStatus: () => Effect.void,
+            localStatus: () =>
+              Effect.succeed({
+                isRepo: true,
+                hasOriginRemote: true,
+                isDefaultBranch: true,
+                branch: "main",
+                hasWorkingTreeChanges: false,
+                workingTree: { files: [], insertions: 0, deletions: 0 },
+              }),
+            remoteStatus: () =>
+              Effect.sleep(Duration.seconds(2)).pipe(
+                Effect.as({
+                  hasUpstream: true,
+                  aheadCount: 0,
+                  behindCount: 0,
+                  pr: null,
+                }),
+              ),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const startedAt = Date.now();
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) => client[WS_METHODS.gitPull]({ cwd: "/tmp/repo" })),
+      );
+      const elapsedMs = Date.now() - startedAt;
+
+      assert.equal(result.status, "pulled");
+      assertTrue(elapsedMs < 1_000);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "completes websocket rpc git.runStackedAction before background git status refresh finishes",
+    () =>
+      Effect.gen(function* () {
+        yield* buildAppUnderTest({
+          layers: {
+            gitManager: {
+              invalidateLocalStatus: () => Effect.void,
+              invalidateRemoteStatus: () => Effect.void,
+              localStatus: () =>
+                Effect.succeed({
+                  isRepo: true,
+                  hasOriginRemote: true,
+                  isDefaultBranch: false,
+                  branch: "feature/demo",
+                  hasWorkingTreeChanges: false,
+                  workingTree: { files: [], insertions: 0, deletions: 0 },
+                }),
+              remoteStatus: () =>
+                Effect.sleep(Duration.seconds(2)).pipe(
+                  Effect.as({
+                    hasUpstream: true,
+                    aheadCount: 0,
+                    behindCount: 0,
+                    pr: null,
+                  }),
+                ),
+              runStackedAction: () =>
+                Effect.succeed({
+                  action: "commit" as const,
+                  branch: { status: "skipped_not_requested" as const },
+                  commit: {
+                    status: "created" as const,
+                    commitSha: "abc123",
+                    subject: "feat: demo",
+                  },
+                  push: { status: "skipped_not_requested" as const },
+                  pr: { status: "skipped_not_requested" as const },
+                  toast: {
+                    title: "Committed abc123",
+                    description: "feat: demo",
+                    cta: {
+                      kind: "run_action" as const,
+                      label: "Push",
+                      action: {
+                        kind: "push" as const,
+                      },
+                    },
+                  },
+                }),
+            },
+          },
+        });
+
+        const wsUrl = yield* getWsServerUrl("/ws");
+        const startedAt = Date.now();
+        yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[WS_METHODS.gitRunStackedAction]({
+              actionId: "action-1",
+              cwd: "/tmp/repo",
+              action: "commit",
+            }).pipe(Stream.runCollect),
+          ),
+        );
+        const elapsedMs = Date.now() - startedAt;
+
+        assertTrue(elapsedMs < 1_000);
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "starts a background local git status refresh after a successful git.runStackedAction",
+    () =>
+      Effect.gen(function* () {
+        const localRefreshStarted = yield* Deferred.make<void>();
+
+        yield* buildAppUnderTest({
+          layers: {
+            gitManager: {
+              invalidateLocalStatus: () => Effect.void,
+              invalidateRemoteStatus: () => Effect.void,
+              localStatus: () =>
+                Deferred.succeed(localRefreshStarted, undefined).pipe(
+                  Effect.ignore,
+                  Effect.andThen(
+                    Effect.succeed({
+                      isRepo: true,
+                      hasOriginRemote: true,
+                      isDefaultBranch: false,
+                      branch: "feature/demo",
+                      hasWorkingTreeChanges: false,
+                      workingTree: { files: [], insertions: 0, deletions: 0 },
+                    }),
+                  ),
+                ),
+              remoteStatus: () =>
+                Effect.sleep(Duration.seconds(2)).pipe(
+                  Effect.as({
+                    hasUpstream: true,
+                    aheadCount: 0,
+                    behindCount: 0,
+                    pr: null,
+                  }),
+                ),
+              runStackedAction: () =>
+                Effect.succeed({
+                  action: "commit" as const,
+                  branch: { status: "skipped_not_requested" as const },
+                  commit: {
+                    status: "created" as const,
+                    commitSha: "abc123",
+                    subject: "feat: demo",
+                  },
+                  push: { status: "skipped_not_requested" as const },
+                  pr: { status: "skipped_not_requested" as const },
+                  toast: {
+                    title: "Committed abc123",
+                    description: "feat: demo",
+                    cta: {
+                      kind: "run_action" as const,
+                      label: "Push",
+                      action: {
+                        kind: "push" as const,
+                      },
+                    },
+                  },
+                }),
+            },
+          },
+        });
+
+        const wsUrl = yield* getWsServerUrl("/ws");
+        yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[WS_METHODS.gitRunStackedAction]({
+              actionId: "action-1",
+              cwd: "/tmp/repo",
+              action: "commit",
+            }).pipe(Stream.runCollect),
+          ),
+        );
+
+        yield* Deferred.await(localRefreshStarted);
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("routes websocket rpc orchestration methods", () =>

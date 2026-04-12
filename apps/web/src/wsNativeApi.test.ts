@@ -3,6 +3,7 @@ import {
   DEFAULT_SERVER_SETTINGS,
   type DesktopBridge,
   EventId,
+  type GitStatusResult,
   ProjectId,
   type OrchestrationEvent,
   type ServerConfig,
@@ -31,6 +32,7 @@ function registerListener<T>(listeners: Set<(event: T) => void>, listener: (even
 
 const terminalEventListeners = new Set<(event: TerminalEvent) => void>();
 const orchestrationEventListeners = new Set<(event: OrchestrationEvent) => void>();
+const gitStatusListeners = new Set<(event: GitStatusResult) => void>();
 
 const rpcClientMock = {
   dispose: vi.fn(),
@@ -46,6 +48,7 @@ const rpcClientMock = {
     ),
   },
   projects: {
+    add: vi.fn(),
     searchEntries: vi.fn(),
     writeFile: vi.fn(),
   },
@@ -54,7 +57,10 @@ const rpcClientMock = {
   },
   git: {
     pull: vi.fn(),
-    status: vi.fn(),
+    refreshStatus: vi.fn(),
+    onStatus: vi.fn((input: { cwd: string }, listener: (event: GitStatusResult) => void) =>
+      registerListener(gitStatusListeners, listener),
+    ),
     runStackedAction: vi.fn(),
     listBranches: vi.fn(),
     createWorktree: vi.fn(),
@@ -168,12 +174,26 @@ const baseServerConfig: ServerConfig = {
   settings: DEFAULT_SERVER_SETTINGS,
 };
 
+const baseGitStatus: GitStatusResult = {
+  isRepo: true,
+  hasOriginRemote: true,
+  isDefaultBranch: false,
+  branch: "feature/streamed",
+  hasWorkingTreeChanges: false,
+  workingTree: { files: [], insertions: 0, deletions: 0 },
+  hasUpstream: true,
+  aheadCount: 0,
+  behindCount: 0,
+  pr: null,
+};
+
 beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
   showContextMenuFallbackMock.mockReset();
   terminalEventListeners.clear();
   orchestrationEventListeners.clear();
+  gitStatusListeners.clear();
   Reflect.deleteProperty(getWindowForTest(), "desktopBridge");
 });
 
@@ -182,6 +202,29 @@ afterEach(() => {
 });
 
 describe("wsNativeApi", () => {
+  it("forwards project onboarding calls directly to the RPC client", async () => {
+    const projectAddResult = {
+      projectId: ProjectId.makeUnsafe("project-added"),
+      title: "ai.code",
+      workspaceRoot: "/tmp/repos/ai.code",
+      baseBranch: "main",
+      cloned: true,
+      mappingAdded: true,
+      projectCreated: true,
+    };
+    rpcClientMock.projects.add.mockResolvedValue(projectAddResult);
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+
+    await expect(
+      api.projects.add({ repositoryUrl: "https://github.com/ArchitekAI/ai.code.git" }),
+    ).resolves.toEqual(projectAddResult);
+    expect(rpcClientMock.projects.add).toHaveBeenCalledWith({
+      repositoryUrl: "https://github.com/ArchitekAI/ai.code.git",
+    });
+  });
+
   it("forwards server config fetches directly to the RPC client", async () => {
     rpcClientMock.server.getConfig.mockResolvedValue(baseServerConfig);
     const { createWsNativeApi } = await import("./wsNativeApi");
@@ -241,6 +284,46 @@ describe("wsNativeApi", () => {
 
     expect(onTerminalEvent).toHaveBeenCalledWith(terminalEvent);
     expect(onDomainEvent).toHaveBeenCalledWith(orchestrationEvent);
+  });
+
+  it("forwards git status stream events", async () => {
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+    const onStatus = vi.fn();
+
+    api.git.onStatus({ cwd: "/repo" }, onStatus);
+
+    const gitStatus = baseGitStatus;
+    emitEvent(gitStatusListeners, gitStatus);
+
+    expect(rpcClientMock.git.onStatus).toHaveBeenCalledWith({ cwd: "/repo" }, onStatus, undefined);
+    expect(onStatus).toHaveBeenCalledWith(gitStatus);
+  });
+
+  it("forwards git status refreshes directly to the RPC client", async () => {
+    rpcClientMock.git.refreshStatus.mockResolvedValue(baseGitStatus);
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+
+    await api.git.refreshStatus({ cwd: "/repo" });
+
+    expect(rpcClientMock.git.refreshStatus).toHaveBeenCalledWith({ cwd: "/repo" });
+  });
+
+  it("forwards orchestration stream subscription options to the RPC client", async () => {
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+    const onDomainEvent = vi.fn();
+    const onResubscribe = vi.fn();
+
+    api.orchestration.onDomainEvent(onDomainEvent, { onResubscribe });
+
+    expect(rpcClientMock.orchestration.onDomainEvent).toHaveBeenCalledWith(onDomainEvent, {
+      onResubscribe,
+    });
   });
 
   it("sends orchestration dispatch commands as the direct RPC payload", async () => {

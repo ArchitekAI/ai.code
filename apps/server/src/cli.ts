@@ -1,4 +1,5 @@
 import { NetService } from "@t3tools/shared/Net";
+import { LinearVerificationMode } from "@t3tools/contracts";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
 import { Config, Effect, FileSystem, LogLevel, Option, Path, Schema } from "effect";
 import { Argument, Command, Flag, GlobalFlag } from "effect/unstable/cli";
@@ -33,7 +34,9 @@ const BootstrapEnvelopeSchema = Schema.Struct({
 });
 
 const modeFlag = Flag.choice("mode", RuntimeMode.literals).pipe(
-  Flag.withDescription("Runtime mode. `desktop` keeps loopback defaults unless overridden."),
+  Flag.withDescription(
+    "Runtime mode. `desktop` keeps loopback defaults unless overridden. `remote` binds to 0.0.0.0, disables browser auto-open, and disables open-in-editor.",
+  ),
   Flag.optional,
 );
 const portFlag = Flag.integer("port").pipe(
@@ -133,6 +136,54 @@ const EnvServerConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  linearWebhookSecret: Config.string("T3CODE_LINEAR_WEBHOOK_SECRET").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  linearWebhookSecretLegacy: Config.string("LINEAR_WEBHOOK_SECRET").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  linearApiToken: Config.string("T3CODE_LINEAR_API_TOKEN").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  linearVerificationMode: Config.schema(
+    LinearVerificationMode,
+    "T3CODE_LINEAR_VERIFICATION_MODE",
+  ).pipe(Config.option, Config.map(Option.getOrUndefined)),
+  linearDirectWebhooks: Config.boolean("LINEAR_DIRECT_WEBHOOKS").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  linearClientId: Config.string("T3CODE_LINEAR_CLIENT_ID").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  linearClientIdLegacy: Config.string("LINEAR_CLIENT_ID").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  linearClientSecret: Config.string("T3CODE_LINEAR_CLIENT_SECRET").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  linearClientSecretLegacy: Config.string("LINEAR_CLIENT_SECRET").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  linearBaseUrl: Config.string("T3CODE_LINEAR_BASE_URL").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  linearBaseUrlLegacy: Config.string("CYRUS_BASE_URL").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  linearOAuthScopes: Config.string("T3CODE_LINEAR_OAUTH_SCOPES").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
 });
 
 interface CliServerFlags {
@@ -155,6 +206,16 @@ const resolveBooleanFlag = (flag: Option.Option<boolean>, envValue: boolean) =>
 const resolveOptionPrecedence = <Value>(
   ...values: ReadonlyArray<Option.Option<Value>>
 ): Option.Option<Value> => Option.firstSomeOf(values);
+
+const parseLinearOAuthScopes = (
+  rawValue: string | undefined,
+): ReadonlyArray<string> | undefined => {
+  const normalizedScopes = rawValue
+    ?.split(",")
+    .map((scope) => scope.trim())
+    .filter((scope) => scope.length > 0);
+  return normalizedScopes && normalizedScopes.length > 0 ? normalizedScopes : undefined;
+};
 
 const loadPersistedObservabilitySettings = Effect.fn(function* (settingsPath: string) {
   const fs = yield* FileSystem.FileSystem;
@@ -245,7 +306,7 @@ export const resolveServerConfig = (
             Option.fromUndefinedOr(bootstrap.noBrowser),
           ),
         ),
-        () => mode === "desktop",
+        () => mode === "desktop" || mode === "remote",
       ),
     );
     const authToken = Option.getOrUndefined(
@@ -288,9 +349,39 @@ export const resolveServerConfig = (
         Option.fromUndefinedOr(env.host),
         Option.flatMap(bootstrapEnvelope, (bootstrap) => Option.fromUndefinedOr(bootstrap.host)),
       ),
-      () => (mode === "desktop" ? "127.0.0.1" : undefined),
+      () => (mode === "desktop" ? "127.0.0.1" : mode === "remote" ? "0.0.0.0" : undefined),
     );
     const logLevel = Option.getOrElse(cliLogLevel, () => env.logLevel);
+    const linearWebhookSecret = env.linearWebhookSecret ?? env.linearWebhookSecretLegacy;
+    const linearClientId = env.linearClientId ?? env.linearClientIdLegacy;
+    const linearClientSecret = env.linearClientSecret ?? env.linearClientSecretLegacy;
+    const linearBaseUrl = env.linearBaseUrl ?? env.linearBaseUrlLegacy;
+    const linearOAuthScopes = parseLinearOAuthScopes(env.linearOAuthScopes);
+    const linearOAuthOverrides =
+      linearClientId || linearClientSecret || linearBaseUrl || linearOAuthScopes
+        ? {
+            // Cyrus parity: allow self-hosted installs to provide OAuth app credentials through env.
+            ...(linearClientId ? { clientId: linearClientId } : {}),
+            ...(linearClientSecret ? { clientSecret: linearClientSecret } : {}),
+            ...(linearBaseUrl ? { baseUrl: linearBaseUrl } : {}),
+            ...(linearOAuthScopes ? { scopes: [...linearOAuthScopes] } : {}),
+          }
+        : undefined;
+    const linearSettingsOverrides =
+      linearWebhookSecret ||
+      env.linearApiToken ||
+      env.linearVerificationMode ||
+      env.linearDirectWebhooks === true ||
+      linearOAuthOverrides
+        ? {
+            // Environment-provided Linear config should take effect immediately on startup.
+            enabled: true,
+            ...(linearWebhookSecret ? { webhookSecret: linearWebhookSecret } : {}),
+            ...(env.linearApiToken ? { apiToken: env.linearApiToken } : {}),
+            ...(env.linearVerificationMode ? { verificationMode: env.linearVerificationMode } : {}),
+            ...(linearOAuthOverrides ? { oauth: linearOAuthOverrides } : {}),
+          }
+        : undefined;
 
     const config: ServerConfigShape = {
       logLevel,
@@ -330,6 +421,7 @@ export const resolveServerConfig = (
       authToken,
       autoBootstrapProjectFromCwd,
       logWebSocketEvents,
+      linearSettingsOverrides,
     };
 
     return config;

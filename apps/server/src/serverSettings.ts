@@ -17,7 +17,7 @@ import {
   type ProviderKind,
   ServerSettings,
   ServerSettingsError,
-  type ServerSettingsPatch,
+  ServerSettingsPatch,
 } from "@t3tools/contracts";
 import {
   Cache,
@@ -58,6 +58,11 @@ export interface ServerSettingsShape {
     patch: ServerSettingsPatch,
   ) => Effect.Effect<ServerSettings, ServerSettingsError>;
 
+  /** Apply runtime-only overrides without persisting them to disk. */
+  readonly applyRuntimeOverrides: (
+    patch: ServerSettingsPatch,
+  ) => Effect.Effect<ServerSettings, ServerSettingsError>;
+
   /** Stream of settings change events. */
   readonly streamChanges: Stream.Stream<ServerSettings>;
 }
@@ -70,20 +75,50 @@ export class ServerSettingsService extends ServiceMap.Service<
     Layer.effect(
       ServerSettingsService,
       Effect.gen(function* () {
-        const currentSettingsRef = yield* Ref.make<ServerSettings>(
+        const baseSettingsRef = yield* Ref.make<ServerSettings>(
           deepMerge(DEFAULT_SERVER_SETTINGS, overrides),
+        );
+        const runtimeOverridesRef = yield* Ref.make<ServerSettingsPatch>({});
+        const changesPubSub = yield* PubSub.unbounded<ServerSettings>();
+
+        const readEffectiveSettings = Effect.all([
+          Ref.get(baseSettingsRef),
+          Ref.get(runtimeOverridesRef),
+        ]).pipe(
+          Effect.map(([baseSettings, runtimeOverrides]) =>
+            Schema.decodeSync(ServerSettings)(deepMerge(baseSettings, runtimeOverrides)),
+          ),
+          Effect.map(resolveTextGenerationProvider),
+        );
+
+        const emitCurrentSettings = readEffectiveSettings.pipe(
+          Effect.tap((settings) => PubSub.publish(changesPubSub, settings)),
         );
 
         return {
           start: Effect.void,
           ready: Effect.void,
-          getSettings: Ref.get(currentSettingsRef),
+          getSettings: readEffectiveSettings,
           updateSettings: (patch) =>
-            Ref.get(currentSettingsRef).pipe(
-              Effect.map((currentSettings) => deepMerge(currentSettings, patch)),
-              Effect.tap((nextSettings) => Ref.set(currentSettingsRef, nextSettings)),
-            ),
-          streamChanges: Stream.empty,
+            Effect.gen(function* () {
+              const currentSettings = yield* Ref.get(baseSettingsRef);
+              const nextSettings = Schema.decodeSync(ServerSettings)(
+                deepMerge(currentSettings, patch),
+              );
+              yield* Ref.set(baseSettingsRef, nextSettings);
+              return yield* emitCurrentSettings;
+            }),
+          applyRuntimeOverrides: (patch) =>
+            Effect.gen(function* () {
+              const currentRuntimeOverrides = yield* Ref.get(runtimeOverridesRef);
+              const nextRuntimeOverrides = Schema.decodeSync(ServerSettingsPatch)(
+                deepMerge(currentRuntimeOverrides, patch),
+              );
+              yield* Ref.set(runtimeOverridesRef, nextRuntimeOverrides);
+              // Runtime overrides model env-backed settings that should never be written back out.
+              return yield* emitCurrentSettings;
+            }),
+          streamChanges: Stream.fromPubSub(changesPubSub),
         } satisfies ServerSettingsShape;
       }),
     );
@@ -166,6 +201,7 @@ const makeServerSettings = Effect.gen(function* () {
   const changesPubSub = yield* PubSub.unbounded<ServerSettings>();
   const startedRef = yield* Ref.make(false);
   const startedDeferred = yield* Deferred.make<void, ServerSettingsError>();
+  const runtimeOverridesRef = yield* Ref.make<ServerSettingsPatch>({});
   const watcherScope = yield* Scope.make("sequential");
   yield* Effect.addFinalizer(() => Scope.close(watcherScope, Exit.void));
 
@@ -218,6 +254,35 @@ const makeServerSettings = Effect.gen(function* () {
 
   const getSettingsFromCache = Cache.get(settingsCache, cacheKey);
 
+  const decodeSettings = (candidate: unknown, source: string) =>
+    Schema.decodeUnknownEffect(ServerSettings)(candidate).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ServerSettingsError({
+            settingsPath: source,
+            detail: `failed to normalize server settings: ${SchemaIssue.makeFormatterDefault()(cause.issue)}`,
+            cause,
+          }),
+      ),
+    );
+
+  const resolveEffectiveSettings = (
+    baseSettings: ServerSettings,
+    runtimeOverrides: ServerSettingsPatch,
+  ) =>
+    decodeSettings(deepMerge(baseSettings, runtimeOverrides), "<runtime-overrides>").pipe(
+      Effect.map(resolveTextGenerationProvider),
+    );
+
+  const getEffectiveSettings = Effect.all([
+    getSettingsFromCache,
+    Ref.get(runtimeOverridesRef),
+  ]).pipe(
+    Effect.flatMap(([baseSettings, runtimeOverrides]) =>
+      resolveEffectiveSettings(baseSettings, runtimeOverrides),
+    ),
+  );
+
   const writeSettingsAtomically = (settings: ServerSettings) => {
     const tempPath = `${settingsPath}.${process.pid}.${Date.now()}.tmp`;
     const sparseSettings = stripDefaultServerSettings(settings, DEFAULT_SERVER_SETTINGS) ?? {};
@@ -241,7 +306,7 @@ const makeServerSettings = Effect.gen(function* () {
   const revalidateAndEmit = writeSemaphore.withPermits(1)(
     Effect.gen(function* () {
       yield* Cache.invalidate(settingsCache, cacheKey);
-      const settings = yield* getSettingsFromCache;
+      const settings = yield* getEffectiveSettings;
       yield* emitChange(settings);
     }),
   );
@@ -309,29 +374,45 @@ const makeServerSettings = Effect.gen(function* () {
   return {
     start,
     ready: Deferred.await(startedDeferred),
-    getSettings: getSettingsFromCache.pipe(Effect.map(resolveTextGenerationProvider)),
+    getSettings: getEffectiveSettings,
     updateSettings: (patch) =>
       writeSemaphore.withPermits(1)(
         Effect.gen(function* () {
-          const current = yield* getSettingsFromCache;
-          const next = yield* Schema.decodeEffect(ServerSettings)(deepMerge(current, patch)).pipe(
+          const currentSettings = yield* getSettingsFromCache;
+          const nextSettings = yield* decodeSettings(deepMerge(currentSettings, patch), "<memory>");
+          const runtimeOverrides = yield* Ref.get(runtimeOverridesRef);
+          yield* writeSettingsAtomically(nextSettings);
+          yield* Cache.set(settingsCache, cacheKey, nextSettings);
+          const effectiveSettings = yield* resolveEffectiveSettings(nextSettings, runtimeOverrides);
+          yield* emitChange(effectiveSettings);
+          return effectiveSettings;
+        }),
+      ),
+    applyRuntimeOverrides: (patch) =>
+      writeSemaphore.withPermits(1)(
+        Effect.gen(function* () {
+          const currentRuntimeOverrides = yield* Ref.get(runtimeOverridesRef);
+          const nextRuntimeOverrides = yield* Schema.decodeUnknownEffect(ServerSettingsPatch)(
+            deepMerge(currentRuntimeOverrides, patch),
+          ).pipe(
             Effect.mapError(
               (cause) =>
                 new ServerSettingsError({
-                  settingsPath: "<memory>",
-                  detail: `failed to normalize server settings: ${SchemaIssue.makeFormatterDefault()(cause.issue)}`,
+                  settingsPath: "<runtime-overrides>",
+                  detail: `failed to normalize runtime settings overrides: ${SchemaIssue.makeFormatterDefault()(cause.issue)}`,
                   cause,
                 }),
             ),
           );
-          yield* writeSettingsAtomically(next);
-          yield* Cache.set(settingsCache, cacheKey, next);
-          yield* emitChange(next);
-          return resolveTextGenerationProvider(next);
+          yield* Ref.set(runtimeOverridesRef, nextRuntimeOverrides);
+          // Env-backed overrides should affect reads immediately without mutating settings.json.
+          const effectiveSettings = yield* getEffectiveSettings;
+          yield* emitChange(effectiveSettings);
+          return effectiveSettings;
         }),
       ),
     get streamChanges() {
-      return Stream.fromPubSub(changesPubSub).pipe(Stream.map(resolveTextGenerationProvider));
+      return Stream.fromPubSub(changesPubSub);
     },
   } satisfies ServerSettingsShape;
 });

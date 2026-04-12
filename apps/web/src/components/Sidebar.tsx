@@ -3,6 +3,7 @@ import {
   ArrowUpDownIcon,
   ChevronRightIcon,
   FolderIcon,
+  GitBranchIcon,
   GitPullRequestIcon,
   PlusIcon,
   SettingsIcon,
@@ -49,7 +50,6 @@ import {
   ThreadId,
   type GitStatusResult,
 } from "@t3tools/contracts";
-import { useQueries } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import {
   type SidebarProjectSortOrder,
@@ -70,7 +70,7 @@ import {
   threadJumpIndexFromCommand,
   threadTraversalDirectionFromCommand,
 } from "../keybindings";
-import { gitStatusQueryOptions } from "../lib/gitReactQuery";
+import { useGitStatus } from "../lib/gitStatusState";
 import { readNativeApi } from "../nativeApi";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
@@ -79,6 +79,7 @@ import { deleteProjectCascade } from "../lib/deleteProjectCascade";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { toastManager } from "./ui/toast";
 import { formatRelativeTimeLabel } from "../timestampFormat";
+import { AddRepositoryDialog } from "./AddRepositoryDialog";
 import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
 import {
   getArm64IntelBuildWarningDescription,
@@ -145,6 +146,11 @@ const SIDEBAR_LIST_ANIMATION_OPTIONS = {
   duration: 180,
   easing: "ease-out",
 } as const;
+
+export function looksLikeRepositoryUrl(value: string): boolean {
+  // Let remote users paste either HTTPS or SSH Git remotes into the add-project field.
+  return /^(?:https?:\/\/|ssh:\/\/|git@)/i.test(value) || value.trim().endsWith(".git");
+}
 
 type SidebarProjectSnapshot = Project & {
   expanded: boolean;
@@ -245,8 +251,20 @@ function prStatusIndicator(pr: ThreadPr): PrStatusIndicator | null {
   return null;
 }
 
+function resolveThreadPr(
+  threadBranch: string | null,
+  gitStatus: GitStatusResult | null,
+): ThreadPr | null {
+  if (threadBranch === null || gitStatus === null || gitStatus.branch !== threadBranch) {
+    return null;
+  }
+
+  return gitStatus.pr ?? null;
+}
+
 interface SidebarThreadRowProps {
   threadId: ThreadId;
+  projectCwd: string | null;
   orderedProjectThreadIds: readonly ThreadId[];
   routeThreadId: ThreadId | null;
   selectedThreadIds: ReadonlySet<ThreadId>;
@@ -256,8 +274,9 @@ interface SidebarThreadRowProps {
   renamingThreadId: ThreadId | null;
   renamingTitle: string;
   setRenamingTitle: (title: string) => void;
-  renamingInputRef: MutableRefObject<HTMLInputElement | null>;
-  renamingCommittedRef: MutableRefObject<boolean>;
+  onRenamingInputMount: (element: HTMLInputElement | null) => void;
+  hasRenameCommitted: () => boolean;
+  markRenameCommitted: () => void;
   confirmingArchiveThreadId: ThreadId | null;
   setConfirmingArchiveThreadId: Dispatch<SetStateAction<ThreadId | null>>;
   confirmArchiveButtonRefs: MutableRefObject<Map<ThreadId, HTMLButtonElement>>;
@@ -277,7 +296,6 @@ interface SidebarThreadRowProps {
   cancelRename: () => void;
   attemptArchiveThread: (threadId: ThreadId) => Promise<void>;
   openPrLink: (event: MouseEvent<HTMLElement>, prUrl: string) => void;
-  pr: ThreadPr | null;
 }
 
 function SidebarThreadRow(props: SidebarThreadRowProps) {
@@ -287,6 +305,8 @@ function SidebarThreadRow(props: SidebarThreadRowProps) {
     (state) =>
       selectThreadTerminalState(state.terminalStateByThreadId, props.threadId).runningTerminalIds,
   );
+  const gitCwd = thread?.worktreePath ?? props.projectCwd;
+  const gitStatus = useGitStatus(thread?.branch != null ? gitCwd : null);
 
   if (!thread) {
     return null;
@@ -303,7 +323,8 @@ function SidebarThreadRow(props: SidebarThreadRowProps) {
       lastVisitedAt,
     },
   });
-  const prStatus = prStatusIndicator(props.pr);
+  const pr = resolveThreadPr(thread.branch, gitStatus.data);
+  const prStatus = prStatusIndicator(pr);
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
   const isConfirmingArchive = props.confirmingArchiveThreadId === thread.id && !isThreadRunning;
   const threadMetaClassName = isConfirmingArchive
@@ -387,13 +408,7 @@ function SidebarThreadRow(props: SidebarThreadRowProps) {
           {threadStatus && <ThreadStatusLabel status={threadStatus} />}
           {props.renamingThreadId === thread.id ? (
             <input
-              ref={(element) => {
-                if (element && props.renamingInputRef.current !== element) {
-                  props.renamingInputRef.current = element;
-                  element.focus();
-                  element.select();
-                }
-              }}
+              ref={props.onRenamingInputMount}
               className="min-w-0 flex-1 truncate text-xs bg-transparent outline-none border border-ring rounded px-0.5"
               value={props.renamingTitle}
               onChange={(event) => props.setRenamingTitle(event.target.value)}
@@ -401,16 +416,16 @@ function SidebarThreadRow(props: SidebarThreadRowProps) {
                 event.stopPropagation();
                 if (event.key === "Enter") {
                   event.preventDefault();
-                  props.renamingCommittedRef.current = true;
+                  props.markRenameCommitted();
                   void props.commitRename(thread.id, props.renamingTitle, thread.title);
                 } else if (event.key === "Escape") {
                   event.preventDefault();
-                  props.renamingCommittedRef.current = true;
+                  props.markRenameCommitted();
                   props.cancelRename();
                 }
               }}
               onBlur={() => {
-                if (!props.renamingCommittedRef.current) {
+                if (!props.hasRenameCommitted()) {
                   void props.commitRename(thread.id, props.renamingTitle, thread.title);
                 }
               }}
@@ -700,11 +715,14 @@ export default function Sidebar() {
   });
   const keybindings = useServerKeybindings();
   const [addingProject, setAddingProject] = useState(false);
+  const [addRepoDialogOpen, setAddRepoDialogOpen] = useState(false);
   const [newCwd, setNewCwd] = useState("");
   const [isPickingFolder, setIsPickingFolder] = useState(false);
   const [isAddingProject, setIsAddingProject] = useState(false);
   const [addProjectError, setAddProjectError] = useState<string | null>(null);
   const addProjectInputRef = useRef<HTMLInputElement | null>(null);
+  const [renamingProjectId, setRenamingProjectId] = useState<ProjectId | null>(null);
+  const [renamingProjectTitle, setRenamingProjectTitle] = useState("");
   const [renamingThreadId, setRenamingThreadId] = useState<ThreadId | null>(null);
   const [renamingTitle, setRenamingTitle] = useState("");
   const [confirmingArchiveThreadId, setConfirmingArchiveThreadId] = useState<ThreadId | null>(null);
@@ -712,6 +730,8 @@ export default function Sidebar() {
     ReadonlySet<ProjectId>
   >(() => new Set());
   const { showThreadJumpHints, updateThreadJumpHintsVisibility } = useThreadJumpHintVisibility();
+  const projectRenamingCommittedRef = useRef(false);
+  const projectRenamingInputRef = useRef<HTMLInputElement | null>(null);
   const renamingCommittedRef = useRef(false);
   const renamingInputRef = useRef<HTMLInputElement | null>(null);
   const confirmArchiveButtonRefs = useRef(new Map<ThreadId, HTMLButtonElement>());
@@ -762,54 +782,6 @@ export default function Sidebar() {
     }),
     [platform, routeTerminalOpen],
   );
-  const threadGitTargets = useMemo(
-    () =>
-      sidebarThreads.map((thread) => ({
-        threadId: thread.id,
-        branch: thread.branch,
-        cwd: thread.worktreePath ?? projectCwdById.get(thread.projectId) ?? null,
-      })),
-    [projectCwdById, sidebarThreads],
-  );
-  const threadGitStatusCwds = useMemo(
-    () => [
-      ...new Set(
-        threadGitTargets
-          .filter((target) => target.branch !== null)
-          .map((target) => target.cwd)
-          .filter((cwd): cwd is string => cwd !== null),
-      ),
-    ],
-    [threadGitTargets],
-  );
-  const threadGitStatusQueries = useQueries({
-    queries: threadGitStatusCwds.map((cwd) => ({
-      ...gitStatusQueryOptions(cwd),
-      staleTime: 30_000,
-      refetchInterval: 60_000,
-    })),
-  });
-  const prByThreadId = useMemo(() => {
-    const statusByCwd = new Map<string, GitStatusResult>();
-    for (let index = 0; index < threadGitStatusCwds.length; index += 1) {
-      const cwd = threadGitStatusCwds[index];
-      if (!cwd) continue;
-      const status = threadGitStatusQueries[index]?.data;
-      if (status) {
-        statusByCwd.set(cwd, status);
-      }
-    }
-
-    const map = new Map<ThreadId, ThreadPr>();
-    for (const target of threadGitTargets) {
-      const status = target.cwd ? statusByCwd.get(target.cwd) : undefined;
-      const branchMatches =
-        target.branch !== null && status?.branch !== null && status?.branch === target.branch;
-      map.set(target.threadId, branchMatches ? (status?.pr ?? null) : null);
-    }
-    return map;
-  }, [threadGitStatusCwds, threadGitStatusQueries, threadGitTargets]);
-
   const openPrLink = useCallback((event: MouseEvent<HTMLElement>, prUrl: string) => {
     event.preventDefault();
     event.stopPropagation();
@@ -887,23 +859,32 @@ export default function Sidebar() {
         finishAddingProject();
         return;
       }
-
-      const projectId = newProjectId();
-      const createdAt = new Date().toISOString();
-      const title = cwd.split(/[/\\]/).findLast(isNonEmptyString) ?? cwd;
       try {
-        await api.orchestration.dispatchCommand({
-          type: "project.create",
-          commandId: newCommandId(),
-          projectId,
-          title,
-          workspaceRoot: cwd,
-          defaultModelSelection: {
-            provider: "codex",
-            model: DEFAULT_MODEL_BY_PROVIDER.codex,
-          },
-          createdAt,
-        });
+        const projectId = looksLikeRepositoryUrl(cwd)
+          ? (
+              await api.projects.add({
+                repositoryUrl: cwd,
+              })
+            ).projectId
+          : await (async () => {
+              const projectId = newProjectId();
+              const createdAt = new Date().toISOString();
+              const title = cwd.split(/[/\\]/).findLast(isNonEmptyString) ?? cwd;
+
+              await api.orchestration.dispatchCommand({
+                type: "project.create",
+                commandId: newCommandId(),
+                projectId,
+                title,
+                workspaceRoot: cwd,
+                defaultModelSelection: {
+                  provider: "codex",
+                  model: DEFAULT_MODEL_BY_PROVIDER.codex,
+                },
+                createdAt,
+              });
+              return projectId;
+            })();
         await handleNewThread(projectId, {
           envMode: appSettings.defaultThreadEnvMode,
         }).catch(() => undefined);
@@ -972,6 +953,28 @@ export default function Sidebar() {
     renamingInputRef.current = null;
   }, []);
 
+  const handleRenamingInputMount = useCallback((element: HTMLInputElement | null) => {
+    if (element && renamingInputRef.current !== element) {
+      renamingInputRef.current = element;
+      element.focus();
+      element.select();
+      return;
+    }
+    if (element === null && renamingInputRef.current !== null) {
+      renamingInputRef.current = null;
+    }
+  }, []);
+
+  const hasRenameCommitted = useCallback(() => renamingCommittedRef.current, []);
+  const markRenameCommitted = useCallback(() => {
+    renamingCommittedRef.current = true;
+  }, []);
+
+  const cancelProjectRename = useCallback(() => {
+    setRenamingProjectId(null);
+    projectRenamingInputRef.current = null;
+  }, []);
+
   const commitRename = useCallback(
     async (threadId: ThreadId, newTitle: string, originalTitle: string) => {
       const finishRename = () => {
@@ -1011,6 +1014,53 @@ export default function Sidebar() {
         toastManager.add({
           type: "error",
           title: "Failed to rename thread",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        });
+      }
+      finishRename();
+    },
+    [],
+  );
+
+  const commitProjectRename = useCallback(
+    async (projectId: ProjectId, newTitle: string, originalTitle: string) => {
+      const finishRename = () => {
+        setRenamingProjectId((current) => {
+          if (current !== projectId) return current;
+          projectRenamingInputRef.current = null;
+          return null;
+        });
+      };
+
+      const trimmed = newTitle.trim();
+      if (trimmed.length === 0) {
+        toastManager.add({
+          type: "warning",
+          title: "Project title cannot be empty",
+        });
+        finishRename();
+        return;
+      }
+      if (trimmed === originalTitle) {
+        finishRename();
+        return;
+      }
+      const api = readNativeApi();
+      if (!api) {
+        finishRename();
+        return;
+      }
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "project.meta.update",
+          commandId: newCommandId(),
+          projectId,
+          title: trimmed,
+        });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Failed to rename project",
           description: error instanceof Error ? error.message : "An error occurred.",
         });
       }
@@ -1075,6 +1125,8 @@ export default function Sidebar() {
       );
 
       if (clicked === "rename") {
+        setRenamingProjectId(null);
+        projectRenamingInputRef.current = null;
         setRenamingThreadId(threadId);
         setRenamingTitle(thread.title);
         renamingCommittedRef.current = false;
@@ -1241,11 +1293,20 @@ export default function Sidebar() {
 
       const clicked = await api.contextMenu.show(
         [
+          { id: "rename", label: "Rename project" },
           { id: "copy-path", label: "Copy Project Path" },
           { id: "delete", label: "Remove project", destructive: true },
         ],
         position,
       );
+      if (clicked === "rename") {
+        setRenamingThreadId(null);
+        renamingInputRef.current = null;
+        setRenamingProjectId(projectId);
+        setRenamingProjectTitle(project.name);
+        projectRenamingCommittedRef.current = false;
+        return;
+      }
       if (clicked === "copy-path") {
         copyPathToClipboard(project.cwd, { path: project.cwd });
         return;
@@ -1636,9 +1697,43 @@ export default function Sidebar() {
               />
             )}
             <ProjectFavicon cwd={project.cwd} />
-            <span className="flex-1 truncate text-xs font-medium text-foreground/90">
-              {project.name}
-            </span>
+            {renamingProjectId === project.id ? (
+              <input
+                ref={(element) => {
+                  if (element && projectRenamingInputRef.current !== element) {
+                    projectRenamingInputRef.current = element;
+                    element.focus();
+                    element.select();
+                  }
+                }}
+                className="min-w-0 flex-1 truncate rounded border border-ring bg-transparent px-0.5 text-xs font-medium text-foreground/90 outline-none"
+                value={renamingProjectTitle}
+                onChange={(event) => setRenamingProjectTitle(event.target.value)}
+                onKeyDown={(event) => {
+                  event.stopPropagation();
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    projectRenamingCommittedRef.current = true;
+                    void commitProjectRename(project.id, renamingProjectTitle, project.name);
+                  } else if (event.key === "Escape") {
+                    event.preventDefault();
+                    projectRenamingCommittedRef.current = true;
+                    cancelProjectRename();
+                  }
+                }}
+                onBlur={() => {
+                  if (!projectRenamingCommittedRef.current) {
+                    void commitProjectRename(project.id, renamingProjectTitle, project.name);
+                  }
+                }}
+                onClick={(event) => event.stopPropagation()}
+                onPointerDown={(event) => event.stopPropagation()}
+              />
+            ) : (
+              <span className="flex-1 truncate text-xs font-medium text-foreground/90">
+                {project.name}
+              </span>
+            )}
           </SidebarMenuButton>
           <Tooltip>
             <TooltipTrigger
@@ -1717,6 +1812,7 @@ export default function Sidebar() {
               <SidebarThreadRow
                 key={threadId}
                 threadId={threadId}
+                projectCwd={project.cwd}
                 orderedProjectThreadIds={orderedProjectThreadIds}
                 routeThreadId={routeThreadId}
                 selectedThreadIds={selectedThreadIds}
@@ -1726,8 +1822,9 @@ export default function Sidebar() {
                 renamingThreadId={renamingThreadId}
                 renamingTitle={renamingTitle}
                 setRenamingTitle={setRenamingTitle}
-                renamingInputRef={renamingInputRef}
-                renamingCommittedRef={renamingCommittedRef}
+                onRenamingInputMount={handleRenamingInputMount}
+                hasRenameCommitted={hasRenameCommitted}
+                markRenameCommitted={markRenameCommitted}
                 confirmingArchiveThreadId={confirmingArchiveThreadId}
                 setConfirmingArchiveThreadId={setConfirmingArchiveThreadId}
                 confirmArchiveButtonRefs={confirmArchiveButtonRefs}
@@ -1740,7 +1837,6 @@ export default function Sidebar() {
                 cancelRename={cancelRename}
                 attemptArchiveThread={attemptArchiveThread}
                 openPrLink={openPrLink}
-                pr={prByThreadId.get(threadId) ?? null}
               />
             ))}
 
@@ -2051,6 +2147,21 @@ export default function Sidebar() {
                       render={
                         <button
                           type="button"
+                          aria-label="Add Git repository"
+                          className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"
+                          onClick={() => setAddRepoDialogOpen(true)}
+                        />
+                      }
+                    >
+                      <GitBranchIcon className="size-3.5" />
+                    </TooltipTrigger>
+                    <TooltipPopup side="right">Add Git repository</TooltipPopup>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <button
+                          type="button"
                           aria-label={
                             shouldShowProjectPathEntry ? "Cancel add project" : "Add project"
                           }
@@ -2093,7 +2204,7 @@ export default function Sidebar() {
                           ? "border-red-500/70 focus:border-red-500"
                           : "border-border focus:border-ring"
                       }`}
-                      placeholder="/path/to/project"
+                      placeholder="/path/to/project or git URL"
                       value={newCwd}
                       onChange={(event) => {
                         setNewCwd(event.target.value);
@@ -2186,6 +2297,16 @@ export default function Sidebar() {
           </SidebarFooter>
         </>
       )}
+      <AddRepositoryDialog
+        open={addRepoDialogOpen}
+        onOpenChange={setAddRepoDialogOpen}
+        onSuccess={(result) => {
+          toastManager.add({
+            type: "success",
+            title: `Added ${result.title}`,
+          });
+        }}
+      />
     </>
   );
 }

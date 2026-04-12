@@ -6,6 +6,7 @@ import readline from "node:readline";
 import {
   ApprovalRequestId,
   EventId,
+  type PromptType,
   ProviderItemId,
   ProviderRequestKind,
   type ProviderUserInputAnswers,
@@ -108,6 +109,11 @@ interface JsonRpcNotification {
 export interface CodexAppServerSendTurnInput {
   readonly threadId: ThreadId;
   readonly input?: string;
+  readonly systemPromptPrefix?: string;
+  readonly promptType?: PromptType;
+  readonly additionalDirectories?: ReadonlyArray<string>;
+  readonly allowedTools?: ReadonlyArray<string>;
+  readonly disallowedTools?: ReadonlyArray<string>;
   readonly attachments?: ReadonlyArray<{ type: "image"; url: string }>;
   readonly model?: string;
   readonly serviceTier?: string | null;
@@ -335,6 +341,7 @@ function buildCodexCollaborationMode(input: {
   readonly interactionMode?: "default" | "plan";
   readonly model?: string;
   readonly effort?: string;
+  readonly systemPromptPrefix?: string;
 }):
   | {
       mode: "default" | "plan";
@@ -354,10 +361,14 @@ function buildCodexCollaborationMode(input: {
     settings: {
       model,
       reasoning_effort: input.effort ?? "medium",
-      developer_instructions:
+      developer_instructions: [
+        input.systemPromptPrefix,
         input.interactionMode === "plan"
           ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
           : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
+      ]
+        .filter((value): value is string => typeof value === "string" && value.length > 0)
+        .join("\n\n"),
     },
   };
 }
@@ -650,6 +661,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   async sendTurn(input: CodexAppServerSendTurnInput): Promise<ProviderTurnStartResult> {
     const context = this.requireSession(input.threadId);
     context.collabReceiverTurns.clear();
+    // Codex does not currently expose Claude-style directory/tool allowlists here, but we
+    // still thread the fields through this boundary so Linear orchestration stays provider-neutral.
+    void input.promptType;
+    void input.additionalDirectories;
+    void input.allowedTools;
+    void input.disallowedTools;
 
     const turnInput: Array<
       { type: "text"; text: string; text_elements: [] } | { type: "image"; url: string }
@@ -718,6 +735,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
       ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
       ...(input.effort !== undefined ? { effort: input.effort } : {}),
+      ...(input.systemPromptPrefix !== undefined
+        ? { systemPromptPrefix: input.systemPromptPrefix }
+        : {}),
     });
     if (collaborationMode) {
       if (!turnStartParams.model) {

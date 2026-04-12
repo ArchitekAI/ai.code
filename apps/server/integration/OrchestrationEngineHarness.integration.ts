@@ -48,10 +48,13 @@ import { CheckpointReactorLive } from "../src/orchestration/Layers/CheckpointRea
 import { OrchestrationEngineLive } from "../src/orchestration/Layers/OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "../src/orchestration/Layers/ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "../src/orchestration/Layers/ProjectionSnapshotQuery.ts";
-import { RuntimeReceiptBusLive } from "../src/orchestration/Layers/RuntimeReceiptBus.ts";
+import { RuntimeReceiptBusTest } from "../src/orchestration/Layers/RuntimeReceiptBus.ts";
 import { OrchestrationReactorLive } from "../src/orchestration/Layers/OrchestrationReactor.ts";
 import { ProviderCommandReactorLive } from "../src/orchestration/Layers/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionLive } from "../src/orchestration/Layers/ProviderRuntimeIngestion.ts";
+import { LinearActivitySink } from "../src/linear/Services/LinearActivitySink.ts";
+import { LinearSessionCompletionReactor } from "../src/linear/Services/LinearSessionCompletionReactor.ts";
+import { ChildCompletionReactor } from "../src/mcp/Services/ChildCompletionReactor.ts";
 import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
@@ -297,7 +300,7 @@ export const makeOrchestrationIntegrationHarness = (
       ProjectionPendingApprovalRepositoryLive,
       checkpointStoreLayer,
       providerLayer,
-      RuntimeReceiptBusLive,
+      RuntimeReceiptBusTest,
     );
     const serverSettingsLayer = ServerSettingsService.layerTest();
     const runtimeIngestionLayer = ProviderRuntimeIngestionLive.pipe(
@@ -333,6 +336,24 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(runtimeIngestionLayer),
       Layer.provideMerge(providerCommandReactorLayer),
       Layer.provideMerge(checkpointReactorLayer),
+      Layer.provideMerge(
+        Layer.succeed(LinearActivitySink, {
+          // Integration harnesses do not need outbound Linear side effects.
+          start: () => Effect.void,
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.succeed(ChildCompletionReactor, {
+          // Harness flows do not delegate child sessions, so keep the reactor inert.
+          start: () => Effect.void,
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.succeed(LinearSessionCompletionReactor, {
+          // Harness flows do not auto-ship or post Linear completion responses.
+          start: () => Effect.void,
+        }),
+      ),
     );
     const layer = Layer.empty.pipe(
       Layer.provideMerge(runtimeServicesLayer),
@@ -376,7 +397,7 @@ export const makeOrchestrationIntegrationHarness = (
       runtime.runPromise(reactor.start().pipe(Scope.provide(scope))),
     ).pipe(Effect.orDie);
     const receiptHistory = yield* Ref.make<ReadonlyArray<OrchestrationRuntimeReceipt>>([]);
-    yield* Stream.runForEach(runtimeReceiptBus.stream, (receipt) =>
+    yield* Stream.runForEach(runtimeReceiptBus.streamEventsForTest, (receipt) =>
       Ref.update(receiptHistory, (history) => [...history, receipt]).pipe(Effect.asVoid),
     ).pipe(Effect.forkIn(scope));
     yield* Effect.sleep(10);

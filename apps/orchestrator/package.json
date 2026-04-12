@@ -1,0 +1,24 @@
+{
+  "name": "@t3tools/orchestrator",
+  "version": "0.0.15",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "convex dev",
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@chat-adapter/linear": "^4.25.0",
+    "@convex-dev/agent": "^0.6.1",
+    "chat": "^4.25.0",
+    "convex": "^1.35.1"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@types/bun": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

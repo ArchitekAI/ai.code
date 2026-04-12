@@ -378,6 +378,17 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.titleSeed !== undefined ? { titleSeed: command.titleSeed } : {}),
           runtimeMode: targetThread.runtimeMode,
           interactionMode: targetThread.interactionMode,
+          ...(command.promptType !== undefined ? { promptType: command.promptType } : {}),
+          ...(command.additionalDirectories !== undefined
+            ? { additionalDirectories: command.additionalDirectories }
+            : {}),
+          ...(command.allowedTools !== undefined ? { allowedTools: command.allowedTools } : {}),
+          ...(command.disallowedTools !== undefined
+            ? { disallowedTools: command.disallowedTools }
+            : {}),
+          ...(command.systemPromptPrefix !== undefined
+            ? { systemPromptPrefix: command.systemPromptPrefix }
+            : {}),
           ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
           createdAt: command.createdAt,
         },

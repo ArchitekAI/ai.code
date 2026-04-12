@@ -64,6 +64,14 @@ export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 export const ProviderInteractionMode = Schema.Literals(["default", "plan"]);
 export type ProviderInteractionMode = typeof ProviderInteractionMode.Type;
 export const DEFAULT_PROVIDER_INTERACTION_MODE: ProviderInteractionMode = "default";
+export const PromptType = Schema.Literals([
+  "builder",
+  "debugger",
+  "scoper",
+  "orchestrator",
+  "graphite-orchestrator",
+]);
+export type PromptType = typeof PromptType.Type;
 export const ProviderRequestKind = Schema.Literals(["command", "file-read", "file-change"]);
 export type ProviderRequestKind = typeof ProviderRequestKind.Type;
 export const AssistantDeliveryMode = Schema.Literals(["buffered", "streaming"]);
@@ -399,6 +407,8 @@ const ThreadTurnStartBootstrapPrepareWorktree = Schema.Struct({
   projectCwd: TrimmedNonEmptyString,
   baseBranch: TrimmedNonEmptyString,
   branch: Schema.optional(TrimmedNonEmptyString),
+  // Linear-triggered sessions can opt into a project MCP config without affecting normal threads.
+  writeLinearMcpConfig: Schema.optional(Schema.Boolean),
 });
 
 const ThreadTurnStartBootstrap = Schema.Struct({
@@ -425,7 +435,13 @@ export const ThreadTurnStartCommand = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
   ),
+  promptType: Schema.optional(PromptType),
+  // Extra directories allow orchestrators to verify child worktrees without changing cwd.
+  additionalDirectories: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  allowedTools: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  disallowedTools: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   bootstrap: Schema.optional(ThreadTurnStartBootstrap),
+  systemPromptPrefix: Schema.optional(Schema.String),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
   createdAt: IsoDateTime,
 });
@@ -444,7 +460,12 @@ const ClientThreadTurnStartCommand = Schema.Struct({
   titleSeed: Schema.optional(TrimmedNonEmptyString),
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
+  promptType: Schema.optional(PromptType),
+  additionalDirectories: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  allowedTools: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  disallowedTools: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   bootstrap: Schema.optional(ThreadTurnStartBootstrap),
+  systemPromptPrefix: Schema.optional(Schema.String),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
   createdAt: IsoDateTime,
 });
@@ -742,6 +763,11 @@ export const ThreadTurnStartRequestedPayload = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
   ),
+  promptType: Schema.optional(PromptType),
+  additionalDirectories: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  allowedTools: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  disallowedTools: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  systemPromptPrefix: Schema.optional(Schema.String),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
   createdAt: IsoDateTime,
 });

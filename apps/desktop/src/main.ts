@@ -65,12 +65,42 @@ const STATE_DIR = Path.join(BASE_DIR, "userdata");
 const DESKTOP_SCHEME = "t3";
 const ROOT_DIR = Path.resolve(__dirname, "../../..");
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
-const APP_DISPLAY_NAME = isDevelopment ? "T3 Code (Dev)" : "T3 Code (Alpha)";
-const APP_USER_MODEL_ID = "com.t3tools.t3code";
-const LINUX_DESKTOP_ENTRY_NAME = isDevelopment ? "t3code-dev.desktop" : "t3code.desktop";
-const LINUX_WM_CLASS = isDevelopment ? "t3code-dev" : "t3code";
-const USER_DATA_DIR_NAME = isDevelopment ? "t3code-dev" : "t3code";
-const LEGACY_USER_DATA_DIR_NAME = isDevelopment ? "T3 Code (Dev)" : "T3 Code (Alpha)";
+const DEFAULT_DEV_APP_DISPLAY_NAME = "T3 Code (Dev)";
+const DEFAULT_PRODUCTION_APP_DISPLAY_NAME = "T3 Code (Alpha)";
+
+function sanitizeDesktopSlug(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function resolveProductionAppDisplayName(): string {
+  const resolved = app.getName().trim();
+  return resolved.length > 0 ? resolved : DEFAULT_PRODUCTION_APP_DISPLAY_NAME;
+}
+
+function resolveProductionSlug(appDisplayName: string): string {
+  if (appDisplayName === DEFAULT_PRODUCTION_APP_DISPLAY_NAME) {
+    return "t3code";
+  }
+
+  return sanitizeDesktopSlug(appDisplayName) || "t3code";
+}
+
+const PRODUCTION_APP_DISPLAY_NAME = resolveProductionAppDisplayName();
+const PRODUCTION_APP_SLUG = resolveProductionSlug(PRODUCTION_APP_DISPLAY_NAME);
+const APP_DISPLAY_NAME = isDevelopment ? DEFAULT_DEV_APP_DISPLAY_NAME : PRODUCTION_APP_DISPLAY_NAME;
+const APP_USER_MODEL_ID = process.env.T3CODE_DESKTOP_APP_ID?.trim() || "com.t3tools.t3code";
+const LINUX_DESKTOP_ENTRY_NAME = isDevelopment
+  ? `${PRODUCTION_APP_SLUG}-dev.desktop`
+  : `${PRODUCTION_APP_SLUG}.desktop`;
+const LINUX_WM_CLASS = isDevelopment ? `${PRODUCTION_APP_SLUG}-dev` : PRODUCTION_APP_SLUG;
+const USER_DATA_DIR_NAME = isDevelopment ? `${PRODUCTION_APP_SLUG}-dev` : PRODUCTION_APP_SLUG;
+const LEGACY_USER_DATA_DIR_NAME = isDevelopment
+  ? DEFAULT_DEV_APP_DISPLAY_NAME
+  : DEFAULT_PRODUCTION_APP_DISPLAY_NAME;
 const COMMIT_HASH_PATTERN = /^[0-9a-f]{7,40}$/i;
 const COMMIT_HASH_DISPLAY_LENGTH = 12;
 const LOG_DIR = Path.join(STATE_DIR, "logs");
@@ -723,7 +753,8 @@ function resolveUserDataPath(): string {
         : process.env.XDG_CONFIG_HOME || Path.join(OS.homedir(), ".config");
 
   const legacyPath = Path.join(appDataBase, LEGACY_USER_DATA_DIR_NAME);
-  if (FS.existsSync(legacyPath)) {
+  // Only reuse the upstream legacy profile when this build still carries the upstream identity.
+  if (PRODUCTION_APP_SLUG === "t3code" && FS.existsSync(legacyPath)) {
     return legacyPath;
   }
 

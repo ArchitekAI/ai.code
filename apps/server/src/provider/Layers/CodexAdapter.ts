@@ -382,6 +382,7 @@ function toUserInputQuestions(payload: Record<string, unknown> | undefined) {
         header,
         question: prompt,
         options,
+        multiSelect: question.multiSelect === true,
       };
     })
     .filter(
@@ -392,6 +393,7 @@ function toUserInputQuestions(payload: Record<string, unknown> | undefined) {
         header: string;
         question: string;
         options: Array<{ label: string; description: string }>;
+        multiSelect: boolean;
       } => question !== undefined,
     );
 
@@ -1476,6 +1478,17 @@ const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         const managerInput = {
           threadId: input.threadId,
           ...(input.input !== undefined ? { input: input.input } : {}),
+          ...(input.systemPromptPrefix !== undefined
+            ? { systemPromptPrefix: input.systemPromptPrefix }
+            : {}),
+          ...(input.promptType !== undefined ? { promptType: input.promptType } : {}),
+          ...(input.additionalDirectories !== undefined
+            ? { additionalDirectories: [...input.additionalDirectories] }
+            : {}),
+          ...(input.allowedTools !== undefined ? { allowedTools: [...input.allowedTools] } : {}),
+          ...(input.disallowedTools !== undefined
+            ? { disallowedTools: [...input.disallowedTools] }
+            : {}),
           ...(input.modelSelection?.provider === "codex"
             ? { model: input.modelSelection.model }
             : {}),
@@ -1631,7 +1644,9 @@ const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     listSessions,
     hasSession,
     stopAll,
-    streamEvents: Stream.fromQueue(runtimeEventQueue),
+    get streamEvents() {
+      return Stream.fromQueue(runtimeEventQueue);
+    },
   } satisfies CodexAdapterShape;
 });
 

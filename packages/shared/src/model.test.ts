@@ -227,6 +227,36 @@ describe("resolveApiModelId", () => {
   it("returns the model as-is for Codex selections", () => {
     expect(resolveApiModelId({ provider: "codex", model: "gpt-5.4" })).toBe("gpt-5.4");
   });
+
+  it("uses the configured Bedrock model ID when Bedrock is enabled", () => {
+    expect(
+      resolveApiModelId(
+        {
+          provider: "claudeAgent",
+          model: "claude-opus-4-6",
+          options: { contextWindow: "1m" },
+        },
+        {
+          CLAUDE_CODE_USE_BEDROCK: "1",
+          ANTHROPIC_DEFAULT_OPUS_MODEL: "us.anthropic.claude-opus-4-6-v1[1m]",
+        },
+      ),
+    ).toBe("us.anthropic.claude-opus-4-6-v1[1m]");
+  });
+
+  it("preserves explicit Bedrock model IDs", () => {
+    expect(
+      resolveApiModelId(
+        {
+          provider: "claudeAgent",
+          model: "us.anthropic.claude-sonnet-4-6-v1[1m]",
+        },
+        {
+          CLAUDE_CODE_USE_BEDROCK: "true",
+        },
+      ),
+    ).toBe("us.anthropic.claude-sonnet-4-6-v1[1m]");
+  });
 });
 
 describe("normalize*ModelOptionsWithCapabilities", () => {

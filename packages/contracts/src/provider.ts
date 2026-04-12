@@ -17,6 +17,7 @@ import {
   ProviderApprovalPolicy,
   ProviderInteractionMode,
   ProviderKind,
+  PromptType,
   ProviderRequestKind,
   ProviderSandboxMode,
   ProviderUserInputAnswers,
@@ -51,6 +52,12 @@ export const ProviderSessionStartInput = Schema.Struct({
   provider: Schema.optional(ProviderKind),
   cwd: Schema.optional(TrimmedNonEmptyString),
   modelSelection: Schema.optional(ModelSelection),
+  // Claude evaluates tool access at session level, so session startup may need the same
+  // prompt-mode directory/tool policy that the first turn will use.
+  promptType: Schema.optional(PromptType),
+  additionalDirectories: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  allowedTools: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  disallowedTools: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   resumeCursor: Schema.optional(Schema.Unknown),
   approvalPolicy: Schema.optional(ProviderApprovalPolicy),
   sandboxMode: Schema.optional(ProviderSandboxMode),
@@ -63,11 +70,18 @@ export const ProviderSendTurnInput = Schema.Struct({
   input: Schema.optional(
     TrimmedNonEmptyString.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)),
   ),
+  // Providers can inject extra Linear-oriented instructions without mutating the stored user message.
+  systemPromptPrefix: Schema.optional(Schema.String),
   attachments: Schema.optional(
     Schema.Array(ChatAttachment).check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS)),
   ),
   modelSelection: Schema.optional(ModelSelection),
   interactionMode: Schema.optional(ProviderInteractionMode),
+  promptType: Schema.optional(PromptType),
+  // Extra directories let parent threads inspect child worktrees during verification turns.
+  additionalDirectories: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  allowedTools: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  disallowedTools: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
 });
 export type ProviderSendTurnInput = typeof ProviderSendTurnInput.Type;
 

@@ -201,6 +201,17 @@ function toError(cause: unknown, fallback: string): Error {
   return cause instanceof Error ? cause : new Error(toMessage(cause, fallback));
 }
 
+function matchesToolRule(toolName: string, rule: string): boolean {
+  const normalizedRule = rule.trim();
+  if (normalizedRule.length === 0) {
+    return false;
+  }
+  if (normalizedRule.endsWith("*")) {
+    return toolName.startsWith(normalizedRule.slice(0, -1));
+  }
+  return toolName === normalizedRule;
+}
+
 function normalizeClaudeStreamMessages(cause: Cause.Cause<Error>): ReadonlyArray<string> {
   const errors = Cause.prettyErrors(cause)
     .map((error) => error.message.trim())
@@ -521,7 +532,10 @@ function buildPromptText(input: ProviderSendTurnInput): string {
   const trimmedEffort = trimOrNull(rawEffort);
   const promptEffort =
     trimmedEffort && caps.promptInjectedEffortLevels.includes(trimmedEffort) ? trimmedEffort : null;
-  return applyClaudePromptEffortPrefix(input.input?.trim() ?? "", promptEffort);
+  const promptText = [input.systemPromptPrefix?.trim(), input.input?.trim() ?? ""]
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .join("\n\n");
+  return applyClaudePromptEffortPrefix(promptText, promptEffort);
 }
 
 function buildUserMessage(input: {
@@ -2554,6 +2568,24 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           } satisfies PermissionResult;
         }
 
+        if ((input.disallowedTools ?? []).some((rule) => matchesToolRule(toolName, rule))) {
+          return {
+            behavior: "deny",
+            message: `Tool '${toolName}' is disabled for this prompt mode.`,
+          } satisfies PermissionResult;
+        }
+
+        const allowedTools = input.allowedTools ?? [];
+        if (
+          allowedTools.length > 0 &&
+          !allowedTools.some((rule) => matchesToolRule(toolName, rule))
+        ) {
+          return {
+            behavior: "deny",
+            message: `Tool '${toolName}' is not enabled for this prompt mode.`,
+          } satisfies PermissionResult;
+        }
+
         const runtimeMode = input.runtimeMode ?? "full-access";
         if (runtimeMode === "full-access") {
           return {
@@ -2684,7 +2716,9 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const modelSelection =
         input.modelSelection?.provider === "claudeAgent" ? input.modelSelection : undefined;
       const caps = getClaudeModelCapabilities(modelSelection?.model);
-      const apiModelId = modelSelection ? resolveApiModelId(modelSelection) : undefined;
+      const apiModelId = modelSelection
+        ? resolveApiModelId(modelSelection, process.env)
+        : undefined;
       const effort = (resolveEffort(caps, modelSelection?.options?.effort) ??
         null) as ClaudeCodeEffort | null;
       const fastMode = modelSelection?.options?.fastMode === true && caps.supportsFastMode;
@@ -2698,6 +2732,13 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(typeof thinking === "boolean" ? { alwaysThinkingEnabled: thinking } : {}),
         ...(fastMode ? { fastMode: true } : {}),
       };
+      const additionalDirectories = [
+        ...new Set(
+          [input.cwd, ...(input.additionalDirectories ?? [])].filter(
+            (value): value is string => !!value,
+          ),
+        ),
+      ];
 
       const queryOptions: ClaudeQueryOptions = {
         ...(input.cwd ? { cwd: input.cwd } : {}),
@@ -2715,7 +2756,7 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         includePartialMessages: true,
         canUseTool,
         env: process.env,
-        ...(input.cwd ? { additionalDirectories: [input.cwd] } : {}),
+        ...(additionalDirectories.length > 0 ? { additionalDirectories } : {}),
       };
 
       const queryRuntime = yield* Effect.try({
@@ -2856,7 +2897,7 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
 
     if (modelSelection?.model) {
-      const apiModelId = resolveApiModelId(modelSelection);
+      const apiModelId = resolveApiModelId(modelSelection, process.env);
       if (context.currentApiModelId !== apiModelId) {
         yield* Effect.tryPromise({
           try: () => context.query.setModel(apiModelId),
@@ -3054,7 +3095,9 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     listSessions,
     hasSession,
     stopAll,
-    streamEvents: Stream.fromQueue(runtimeEventQueue),
+    get streamEvents() {
+      return Stream.fromQueue(runtimeEventQueue);
+    },
   } satisfies ClaudeAdapterShape;
 });
 
